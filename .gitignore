@@ -10,20 +10,18 @@ out/
 # Local runtime/modpack jars
 mods/
 libs/
-*.jar
 *.log
 crash-reports/
 logs/
 world/
 config/
 
-# Codex/loom temp dirs
+# Loom temp dirs
 _tmp_loom/
 _tmp_yarn/
 run/
 
-# Git dirs that got stranded by ACL issues
-.git
+# Stranded git artifacts from ACL issues
 .gitdir/
 .git_bad/
 .git_denied/
@@ -40,3 +38,10 @@ run/
 # OS
 Thumbs.db
 Desktop.ini
+
+# Fabric / Gradle
+.tmp_fabric/
+yarn.jar
+*.log
+build/
+.gradle/
