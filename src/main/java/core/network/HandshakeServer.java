@@ -25,7 +25,9 @@ public final class HandshakeServer {
         if (initialized) return;
         initialized = true;
 
-        PayloadTypeRegistry.playC2S().register(HelloPayload.ID, HelloPayload.CODEC);
+        Safe.run("HandshakeServer.registerPayloads", () ->
+            PayloadTypeRegistry.playC2S().register(HelloPayload.ID, HelloPayload.CODEC)
+        );
 
         ServerPlayNetworking.registerGlobalReceiver(HelloPayload.ID, (payload, context) ->
             context.server().execute(() -> Safe.run("HandshakeServer.onHello", () -> {

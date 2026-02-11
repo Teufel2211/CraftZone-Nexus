@@ -10,12 +10,12 @@ import net.fabricmc.fabric.api.networking.v1.PayloadTypeRegistry;
 public final class CoreClient implements ClientModInitializer {
     @Override
     public void onInitializeClient() {
-        PayloadTypeRegistry.playC2S().register(HelloPayload.ID, HelloPayload.CODEC);
+        Safe.run("CoreClient.registerPayloads", () ->
+            PayloadTypeRegistry.playC2S().register(HelloPayload.ID, HelloPayload.CODEC)
+        );
 
         ClientPlayConnectionEvents.JOIN.register((handler, sender, client) ->
-            Safe.run("CoreClient.handshake", () -> {
-                ClientPlayNetworking.send(new HelloPayload());
-            })
+            Safe.run("CoreClient.handshake", () -> ClientPlayNetworking.send(new HelloPayload()))
         );
     }
 }
