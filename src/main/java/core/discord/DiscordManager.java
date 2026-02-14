@@ -27,50 +27,79 @@ import java.io.FileReader;
 import java.io.FileWriter;
 import java.io.IOException;
 import java.lang.reflect.Type;
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.time.Instant;
 import java.util.concurrent.ExecutorService;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 
 public class DiscordManager {
     private static final Logger LOGGER = LoggerFactory.getLogger("core");
     private static final OkHttpClient CLIENT = new OkHttpClient();
     private static final Gson GSON = new GsonBuilder().setPrettyPrinting().create();
-    private static final ExecutorService EXECUTOR = Executors.newCachedThreadPool();
+    private static final ExecutorService EXECUTOR = Executors.newSingleThreadExecutor(r -> {
+        Thread t = new Thread(r, "core-discord-logger");
+        t.setDaemon(true);
+        return t;
+    });
     private static final File LINKED_ACCOUNTS_FILE = new File("data/core-discord-links.json");
+    private static final int DISCORD_MAX_EMBED_DESCRIPTION = 3500;
+    private static final int WEBHOOK_MAX_RETRIES = 3;
+    private static final long WEBHOOK_RETRY_DELAY_MS = 400L;
+    private static final long DEDUPE_WINDOW_MS = 1500L;
 
     private static JDA jda;
-    private static final Map<String, UUID> discordToMinecraft = new HashMap<>();
-    private static final Map<UUID, String> minecraftToDiscord = new HashMap<>();
+    private static volatile boolean botStarted = false;
+    private static final Map<String, UUID> discordToMinecraft = new ConcurrentHashMap<>();
+    private static final Map<UUID, String> minecraftToDiscord = new ConcurrentHashMap<>();
+    private static final Map<String, Long> webhookDedupe = new ConcurrentHashMap<>();
     private static MinecraftServer server;
 
     public static void init() {
-        ServerLifecycleEvents.SERVER_STARTED.register(s -> Safe.run("DiscordManager.onServerStarted", () -> server = s));
+        ServerLifecycleEvents.SERVER_STARTED.register(s -> Safe.run("DiscordManager.onServerStarted", () -> {
+            server = s;
+            startBotIfConfigured();
+        }));
+        ServerLifecycleEvents.SERVER_STOPPING.register(s -> Safe.run("DiscordManager.shutdown", DiscordManager::shutdown));
         Safe.run("DiscordManager.loadLinkedAccounts", DiscordManager::loadLinkedAccounts);
+    }
 
-        // Initialize webhook-based logging
-        if (!ConfigManager.getConfig().discord.botToken.isEmpty()) {
-            EXECUTOR.submit(() -> {
-                try {
-                    jda = JDABuilder.createDefault(ConfigManager.getConfig().discord.botToken)
-                        .enableIntents(GatewayIntent.GUILD_MEMBERS, GatewayIntent.MESSAGE_CONTENT)
-                        .addEventListeners(new DiscordCommandListener())
-                        .build();
+    private static void startBotIfConfigured() {
+        if (botStarted) return;
+        var cfg = ConfigManager.getConfig();
+        if (cfg == null || cfg.discord == null) return;
 
-                    jda.awaitReady();
-
-                    // Register slash commands
-                    if (ConfigManager.getConfig().discord.enableBidirectionalCommands) {
-                        registerSlashCommands();
-                    }
-
-                    LOGGER.info("Discord bot initialized successfully");
-                } catch (Exception e) {
-                    LOGGER.error("Failed to initialize Discord bot", e);
-                }
-            });
+        String token = cfg.discord.botToken;
+        if (token == null || token.isBlank()) {
+            LOGGER.info("Discord bot disabled: botToken is empty.");
+            return;
         }
+
+        botStarted = true;
+        EXECUTOR.submit(() -> {
+            try {
+                jda = JDABuilder.createDefault(token)
+                    .enableIntents(GatewayIntent.GUILD_MEMBERS, GatewayIntent.MESSAGE_CONTENT)
+                    .addEventListeners(new DiscordCommandListener())
+                    .build();
+
+                jda.awaitReady();
+
+                if (cfg.discord.enableBidirectionalCommands) {
+                    registerSlashCommands();
+                }
+
+                LOGGER.info("Discord bot started with server.");
+            } catch (Exception e) {
+                botStarted = false;
+                LOGGER.error("Failed to initialize Discord bot", e);
+            }
+        });
     }
 
     private static void registerSlashCommands() {
@@ -91,7 +120,10 @@ public class DiscordManager {
                 .addOption(OptionType.STRING, "action", "Action (place/list)", true)
                 .addOption(OptionType.STRING, "player", "Target player", false)
                 .addOption(OptionType.NUMBER, "amount", "Bounty amount", false)
-        ).queue();
+        ).queue(
+            ignored -> LOGGER.info("Discord slash commands registered"),
+            error -> LOGGER.warn("Failed to register discord slash commands", error)
+        );
     }
 
     // Account Linking
@@ -178,19 +210,108 @@ public class DiscordManager {
     }
 
     private static void sendWebhook(String url, String title, String description, int color) {
-        if (url == null || url.isEmpty()) return;
+        String webhookUrl = resolveWebhook(url);
+        if (webhookUrl == null || webhookUrl.isBlank()) return;
 
         EXECUTOR.submit(() -> {
-            try {
-                Embed embed = new Embed(title, description, color);
-                String json = GSON.toJson(new WebhookPayload(embed));
-                RequestBody body = RequestBody.create(json, MediaType.get("application/json"));
-                Request request = new Request.Builder().url(url).post(body).build();
-                CLIENT.newCall(request).execute();
-            } catch (IOException e) {
-                LOGGER.error("Failed to send Discord webhook", e);
+            String safeDescription = sanitizeDiscordText(description);
+            if (isDuplicate(webhookUrl, title, safeDescription)) {
+                return;
+            }
+            List<Field> fields = extractFields(safeDescription);
+            String embedDescription = fields.isEmpty()
+                ? formatDescription(safeDescription)
+                : "Details";
+            Embed embed = new Embed(title, embedDescription, color, fields);
+            String json = GSON.toJson(new WebhookPayload(embed));
+            RequestBody body = RequestBody.create(json, MediaType.get("application/json"));
+            Request request = new Request.Builder()
+                .url(webhookUrl)
+                .header("User-Agent", "core-mod-discord-logger")
+                .post(body)
+                .build();
+
+            for (int attempt = 1; attempt <= WEBHOOK_MAX_RETRIES; attempt++) {
+                try (Response response = CLIENT.newCall(request).execute()) {
+                    if (response.isSuccessful()) {
+                        return;
+                    }
+                    LOGGER.warn("Discord webhook failed (attempt {}): HTTP {}", attempt, response.code());
+                } catch (IOException e) {
+                    LOGGER.warn("Discord webhook IO error (attempt {})", attempt, e);
+                }
+
+                if (attempt < WEBHOOK_MAX_RETRIES) {
+                    try {
+                        Thread.sleep(WEBHOOK_RETRY_DELAY_MS * attempt);
+                    } catch (InterruptedException ignored) {
+                        Thread.currentThread().interrupt();
+                        return;
+                    }
+                }
             }
         });
+    }
+
+    private static boolean isDuplicate(String webhookUrl, String title, String description) {
+        String key = webhookUrl + "|" + title + "|" + description;
+        long now = System.currentTimeMillis();
+        Long prev = webhookDedupe.put(key, now);
+        if (prev == null) return false;
+        return now - prev < DEDUPE_WINDOW_MS;
+    }
+
+    private static String formatDescription(String raw) {
+        if (raw == null || raw.isBlank()) return "(empty)";
+        String[] lines = raw.split("\\R");
+        if (lines.length <= 1) return raw;
+        StringBuilder sb = new StringBuilder();
+        for (String line : lines) {
+            if (!line.isBlank()) {
+                sb.append("• ").append(line.trim()).append('\n');
+            }
+        }
+        String formatted = sb.toString().trim();
+        if (formatted.isEmpty()) return raw;
+        return formatted;
+    }
+
+    private static List<Field> extractFields(String raw) {
+        List<Field> out = new ArrayList<>();
+        if (raw == null || raw.isBlank()) return out;
+        for (String line : raw.split("\\R")) {
+            String trimmed = line.trim();
+            if (trimmed.isEmpty()) continue;
+            int idx = trimmed.indexOf(':');
+            if (idx <= 0 || idx >= trimmed.length() - 1) continue;
+            String name = trimmed.substring(0, idx).trim();
+            String value = trimmed.substring(idx + 1).trim();
+            if (name.length() > 64) name = name.substring(0, 64);
+            if (value.length() > 256) value = value.substring(0, 256);
+            if (!name.isEmpty() && !value.isEmpty()) {
+                out.add(new Field(name, value, true));
+            }
+            if (out.size() >= 8) break;
+        }
+        return out;
+    }
+
+    private static String resolveWebhook(String specificWebhook) {
+        var cfg = ConfigManager.getConfig();
+        if (cfg == null || cfg.discord == null) return null;
+        if (specificWebhook != null && !specificWebhook.isBlank()) return specificWebhook;
+        return cfg.discord.webhookUrl;
+    }
+
+    private static String sanitizeDiscordText(String raw) {
+        if (raw == null) return "";
+        String sanitized = raw
+            .replace("@everyone", "@\u200beveryone")
+            .replace("@here", "@\u200bhere");
+        if (sanitized.length() > DISCORD_MAX_EMBED_DESCRIPTION) {
+            return sanitized.substring(0, DISCORD_MAX_EMBED_DESCRIPTION - 3) + "...";
+        }
+        return sanitized;
     }
 
     private static void loadLinkedAccounts() {
@@ -262,11 +383,16 @@ public class DiscordManager {
         }
 
         private void handleBanCommand(SlashCommandInteractionEvent event) {
+            if (event.getOption("player") == null) {
+                event.reply("Missing required option: player").setEphemeral(true).queue();
+                return;
+            }
             String playerName = event.getOption("player").getAsString();
             String reason = event.getOption("reason") != null ? event.getOption("reason").getAsString() : "No reason provided";
 
             if (server != null) {
-                server.getCommandManager().parseAndExecute(server.getCommandSource(), "ban " + playerName + " " + reason);
+                server.execute(() ->
+                    server.getCommandManager().parseAndExecute(server.getCommandSource(), "ban " + playerName + " " + reason));
             }
 
             event.reply("🔨 Banned player: " + playerName + "\nReason: " + reason).queue();
@@ -276,12 +402,17 @@ public class DiscordManager {
         }
 
         private void handleEcoCommand(SlashCommandInteractionEvent event) {
+            if (event.getOption("action") == null || event.getOption("player") == null || event.getOption("amount") == null) {
+                event.reply("Missing required options for /eco").setEphemeral(true).queue();
+                return;
+            }
             String action = event.getOption("action").getAsString();
             String playerName = event.getOption("player").getAsString();
             double amount = event.getOption("amount").getAsDouble();
 
             if (server != null) {
-                server.getCommandManager().parseAndExecute(server.getCommandSource(), "eco " + action + " " + playerName + " " + amount);
+                server.execute(() ->
+                    server.getCommandManager().parseAndExecute(server.getCommandSource(), "eco " + action + " " + playerName + " " + amount));
             }
 
             event.reply("💰 " + action + " " + amount + " to/from " + playerName).queue();
@@ -291,14 +422,23 @@ public class DiscordManager {
         }
 
         private void handleBountyCommand(SlashCommandInteractionEvent event) {
+            if (event.getOption("action") == null) {
+                event.reply("Missing required option: action").setEphemeral(true).queue();
+                return;
+            }
             String action = event.getOption("action").getAsString();
 
             if ("place".equals(action)) {
+                if (event.getOption("player") == null || event.getOption("amount") == null) {
+                    event.reply("Missing required options for bounty placement").setEphemeral(true).queue();
+                    return;
+                }
                 String playerName = event.getOption("player").getAsString();
                 double amount = event.getOption("amount").getAsDouble();
 
                 if (server != null) {
-                    server.getCommandManager().parseAndExecute(server.getCommandSource(), "bounty place " + playerName + " " + amount);
+                    server.execute(() ->
+                        server.getCommandManager().parseAndExecute(server.getCommandSource(), "bounty set " + playerName + " " + amount));
                 }
 
                 event.reply("🎯 Placed bounty of " + amount + " on " + playerName).queue();
@@ -308,6 +448,8 @@ public class DiscordManager {
             } else if ("list".equals(action)) {
                 String list = getBountyList();
                 event.reply(list).queue();
+            } else {
+                event.reply("Unknown action. Use: place or list").setEphemeral(true).queue();
             }
         }
     }
@@ -354,11 +496,67 @@ public class DiscordManager {
         public String description;
         @SuppressWarnings("unused")
         public int color;
+        @SuppressWarnings("unused")
+        public String timestamp;
+        @SuppressWarnings("unused")
+        public Footer footer;
+        @SuppressWarnings("unused")
+        public Field[] fields;
 
-        public Embed(String title, String description, int color) {
+        public Embed(String title, String description, int color, List<Field> fields) {
             this.title = title;
             this.description = description;
             this.color = color;
+            this.timestamp = Instant.now().toString();
+            this.footer = new Footer(server != null ? ("Core • " + server.getVersion()) : "Core");
+            this.fields = fields == null ? new Field[0] : fields.toArray(new Field[0]);
+        }
+    }
+
+    private static class Footer {
+        @SuppressWarnings("unused")
+        public String text;
+
+        public Footer(String text) {
+            this.text = text;
+        }
+    }
+
+    private static class Field {
+        @SuppressWarnings("unused")
+        public String name;
+        @SuppressWarnings("unused")
+        public String value;
+        @SuppressWarnings("unused")
+        public boolean inline;
+
+        public Field(String name, String value, boolean inline) {
+            this.name = name;
+            this.value = value;
+            this.inline = inline;
+        }
+    }
+
+    private static void shutdown() {
+        botStarted = false;
+        if (jda != null) {
+            try {
+                jda.shutdownNow();
+            } catch (Exception e) {
+                LOGGER.warn("Error while shutting down JDA", e);
+            } finally {
+                jda = null;
+            }
+        }
+
+        EXECUTOR.shutdown();
+        try {
+            if (!EXECUTOR.awaitTermination(2, TimeUnit.SECONDS)) {
+                EXECUTOR.shutdownNow();
+            }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            EXECUTOR.shutdownNow();
         }
     }
 }

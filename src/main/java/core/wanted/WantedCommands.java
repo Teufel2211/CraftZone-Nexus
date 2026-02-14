@@ -5,7 +5,9 @@ import com.mojang.brigadier.arguments.IntegerArgumentType;
 import com.mojang.brigadier.arguments.StringArgumentType;
 import com.mojang.brigadier.context.CommandContext;
 import com.mojang.brigadier.exceptions.CommandSyntaxException;
+import com.mojang.brigadier.suggestion.SuggestionProvider;
 import core.menu.MenuCommands;
+import net.minecraft.command.CommandSource;
 import net.minecraft.command.argument.EntityArgumentType;
 import net.minecraft.command.permission.Permission;
 import net.minecraft.command.permission.PermissionLevel;
@@ -19,6 +21,14 @@ import java.util.Map;
 import java.util.UUID;
 
 public class WantedCommands {
+    private static final SuggestionProvider<ServerCommandSource> REASON_SUGGESTIONS =
+        (context, builder) -> CommandSource.suggestMatching(
+            java.util.Arrays.stream(WantedManager.WantedReason.values())
+                .map(v -> v.name().toLowerCase())
+                .toList(),
+            builder
+        );
+
     public static void register(CommandDispatcher<ServerCommandSource> dispatcher) {
         dispatcher.register(CommandManager.literal("wanted")
             .executes(context -> openWanted(context.getSource()))
@@ -36,6 +46,7 @@ public class WantedCommands {
                     .then(CommandManager.argument("delta", IntegerArgumentType.integer(1, 5))
                         .executes(ctx -> add(ctx, IntegerArgumentType.getInteger(ctx, "delta"), WantedManager.WantedReason.ADMIN.name()))
                         .then(CommandManager.argument("reason", StringArgumentType.greedyString())
+                            .suggests(REASON_SUGGESTIONS)
                             .executes(ctx -> add(ctx, IntegerArgumentType.getInteger(ctx, "delta"), StringArgumentType.getString(ctx, "reason")))))))
             .then(CommandManager.literal("set")
                 .requires(WantedCommands::isAdmin)
@@ -43,6 +54,7 @@ public class WantedCommands {
                     .then(CommandManager.argument("level", IntegerArgumentType.integer(1, 5))
                         .executes(ctx -> set(ctx, IntegerArgumentType.getInteger(ctx, "level"), WantedManager.WantedReason.ADMIN.name()))
                         .then(CommandManager.argument("reason", StringArgumentType.greedyString())
+                            .suggests(REASON_SUGGESTIONS)
                             .executes(ctx -> set(ctx, IntegerArgumentType.getInteger(ctx, "level"), StringArgumentType.getString(ctx, "reason")))))))
             .then(CommandManager.literal("remove")
                 .requires(WantedCommands::isAdmin)

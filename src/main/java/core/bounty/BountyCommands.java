@@ -6,8 +6,10 @@ import com.mojang.brigadier.arguments.IntegerArgumentType;
 import com.mojang.brigadier.arguments.StringArgumentType;
 import com.mojang.brigadier.context.CommandContext;
 import com.mojang.brigadier.exceptions.CommandSyntaxException;
+import com.mojang.brigadier.suggestion.SuggestionProvider;
 import core.menu.MenuCommands;
 import net.minecraft.server.network.ServerPlayerEntity;
+import net.minecraft.command.CommandSource;
 import net.minecraft.command.argument.EntityArgumentType;
 import net.minecraft.command.permission.Permission;
 import net.minecraft.command.permission.PermissionLevel;
@@ -21,6 +23,15 @@ import java.util.Map;
 import java.util.UUID;
 
 public class BountyCommands {
+    private static final SuggestionProvider<ServerCommandSource> ANON_SUGGESTIONS =
+        (context, builder) -> CommandSource.suggestMatching(java.util.List.of("0", "1"), builder);
+
+    private static final SuggestionProvider<ServerCommandSource> BOUNTY_REASON_SUGGESTIONS =
+        (context, builder) -> CommandSource.suggestMatching(
+            java.util.List.of("manual", "pvp", "raid", "grief", "steal"),
+            builder
+        );
+
     public static void register(CommandDispatcher<ServerCommandSource> dispatcher) {
         dispatcher.register(CommandManager.literal("bounty")
             .executes(context -> openBounty(context.getSource()))
@@ -29,8 +40,9 @@ public class BountyCommands {
                     .then(CommandManager.argument("amount", DoubleArgumentType.doubleArg(0.01))
                         .executes(ctx -> set(ctx, "Manual bounty", false))
                         .then(CommandManager.argument("reason", StringArgumentType.greedyString())
+                            .suggests(BOUNTY_REASON_SUGGESTIONS)
                             .executes(ctx -> set(ctx, StringArgumentType.getString(ctx, "reason"), false))
-                            .then(CommandManager.argument("anonymous", IntegerArgumentType.integer(0, 1))
+                            .then(CommandManager.argument("anonymous", IntegerArgumentType.integer(0, 1)).suggests(ANON_SUGGESTIONS)
                                 .executes(ctx -> set(ctx, StringArgumentType.getString(ctx, "reason"), IntegerArgumentType.getInteger(ctx, "anonymous") == 1)))))))
             // Convenience: /bounty <player> <amount>
             .then(CommandManager.argument("player", EntityArgumentType.player())

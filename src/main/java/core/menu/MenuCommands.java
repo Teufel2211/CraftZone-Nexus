@@ -51,6 +51,8 @@ public final class MenuCommands {
         source.sendMessage(Text.literal("Quick actions:").formatted(Formatting.AQUA));
         source.sendMessage(run("Balance", "/balance", "Show your balance"));
         source.sendMessage(suggest("Pay", "/pay <player> <amount>", "Pay a player"));
+        source.sendMessage(run("Spawn", "/spawn", "Teleport to world spawn"));
+        source.sendMessage(suggest("Random TP", "/rtp <radius>", "Random teleport in your current world"));
         source.sendMessage(run("Auction List", "/auction list", "List active auctions"));
 
         source.sendMessage(Text.literal("Tip: click a line to run/suggest the command.").formatted(Formatting.GRAY));
@@ -93,6 +95,7 @@ public final class MenuCommands {
         source.sendMessage(run("Balance", "/balance", "Show your balance"));
         source.sendMessage(suggest("Pay", "/pay <player> <amount>", "Pay a player"));
         source.sendMessage(run("Shop", "/shop", "Open the shop"));
+        source.sendMessage(run("Sell GUI", "/sell", "Open sell GUI"));
         source.sendMessage(Text.literal(" "));
         source.sendMessage(section("Auctions"));
         source.sendMessage(run("List", "/auction list", "List active auctions"));

@@ -4,7 +4,9 @@ import com.mojang.brigadier.CommandDispatcher;
 import com.mojang.brigadier.arguments.DoubleArgumentType;
 import com.mojang.brigadier.arguments.IntegerArgumentType;
 import com.mojang.brigadier.context.CommandContext;
+import com.mojang.brigadier.suggestion.SuggestionProvider;
 import core.menu.MenuCommands;
+import net.minecraft.command.CommandSource;
 import net.minecraft.command.permission.Permission;
 import net.minecraft.command.permission.PermissionLevel;
 import net.minecraft.server.command.CommandManager;
@@ -18,6 +20,12 @@ import java.util.Map;
 public final class AuctionCommands {
     private AuctionCommands() {}
 
+    private static final SuggestionProvider<ServerCommandSource> AUCTION_ID_SUGGESTIONS =
+        (context, builder) -> CommandSource.suggestMatching(
+            AuctionManager.getActiveAuctions().keySet().stream().map(String::valueOf).toList(),
+            builder
+        );
+
     public static void register(CommandDispatcher<ServerCommandSource> dispatcher) {
         dispatcher.register(CommandManager.literal("auction")
             .executes(context -> MenuCommands.openAuctionMenu(context.getSource()))
@@ -28,14 +36,14 @@ public final class AuctionCommands {
                     .then(CommandManager.argument("buyoutPrice", DoubleArgumentType.doubleArg(0.01))
                         .executes(AuctionCommands::sellWithBuyout))))
             .then(CommandManager.literal("bid")
-                .then(CommandManager.argument("id", IntegerArgumentType.integer(1))
+                .then(CommandManager.argument("id", IntegerArgumentType.integer(1)).suggests(AUCTION_ID_SUGGESTIONS)
                     .then(CommandManager.argument("amount", DoubleArgumentType.doubleArg(0.01))
                         .executes(AuctionCommands::bid))))
             .then(CommandManager.literal("buy")
-                .then(CommandManager.argument("id", IntegerArgumentType.integer(1))
+                .then(CommandManager.argument("id", IntegerArgumentType.integer(1)).suggests(AUCTION_ID_SUGGESTIONS)
                     .executes(AuctionCommands::buyNow)))
             .then(CommandManager.literal("cancel")
-                .then(CommandManager.argument("id", IntegerArgumentType.integer(1))
+                .then(CommandManager.argument("id", IntegerArgumentType.integer(1)).suggests(AUCTION_ID_SUGGESTIONS)
                     .executes(AuctionCommands::cancel)))
             .then(CommandManager.literal("claim").executes(AuctionCommands::claim)));
     }

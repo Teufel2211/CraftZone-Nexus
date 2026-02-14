@@ -294,6 +294,7 @@ public class MapCommands {
                     }))
                 .then(CommandManager.literal("delete")
                     .then(CommandManager.argument("name", StringArgumentType.word())
+                        .suggests(WAYPOINT_NAMES)
                         .executes(context -> {
                             String name = StringArgumentType.getString(context, "name");
                             if (!getWaypoints().containsKey(name)) {

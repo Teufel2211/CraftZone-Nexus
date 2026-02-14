@@ -22,13 +22,16 @@ import core.trust.TrustCommands;
 import core.wanted.WantedManager;
 import core.wanted.WantedCommands;
 import core.logging.LoggingManager;
+import core.logging.ChestAuditManager;
 import core.discord.DiscordManager;
+import core.dashboard.DashboardManager;
 import core.map.MapManager;
 import core.map.MapNetworking;
 import core.map.MapCommands;
 import core.config.ConfigManager;
 import core.menu.MenuCommands;
 import core.network.HandshakeServer;
+import core.world.WorldCommands;
 import net.fabricmc.fabric.api.command.v2.CommandRegistrationCallback;
 import net.fabricmc.fabric.api.networking.v1.ServerPlayConnectionEvents;
 import net.minecraft.server.command.CommandManager;
@@ -37,9 +40,18 @@ import com.mojang.brigadier.arguments.StringArgumentType;
 import net.minecraft.command.argument.EntityArgumentType;
 import net.minecraft.server.network.ServerPlayerEntity;
 import core.util.Safe;
+import com.mojang.brigadier.suggestion.SuggestionProvider;
+import net.minecraft.command.CommandSource;
+import java.util.List;
 
 public class CoreMod implements ModInitializer {
     private static final Logger LOGGER = LoggerFactory.getLogger("core");
+    private static final SuggestionProvider<net.minecraft.server.command.ServerCommandSource> VOICE_GROUP_SUGGESTIONS =
+        (context, builder) -> CommandSource.suggestMatching(
+            List.of("global", "staff", "support", "admin", "mod", "builder", "vip"),
+            builder
+        );
+
     @Override
     public void onInitialize() {
         Safe.run("HandshakeServer.init", HandshakeServer::init);
@@ -59,7 +71,9 @@ public class CoreMod implements ModInitializer {
             BountyManager.init();
             WantedManager.init();
             LoggingManager.init();
+            ChestAuditManager.init();
             DiscordManager.init();
+            DashboardManager.init();
             MapManager.init();
             MapNetworking.init();
         } catch (Exception e) {
@@ -80,6 +94,7 @@ public class CoreMod implements ModInitializer {
                         context.getSource().sendMessage(Text.literal("§eClaim Commands: /claim, /unclaim, /claim info"));
                     }
                     context.getSource().sendMessage(Text.literal("§eEconomy Commands: /balance, /pay <player> <amount>, /shop"));
+                    context.getSource().sendMessage(Text.literal("§eSell Command: /sell (opens sell GUI)"));
                     context.getSource().sendMessage(Text.literal("§eAuction Commands: /auction list, /auction sell <startingBid>, /auction bid <id> <amount>, /auction cancel <id>, /auction claim"));
                     context.getSource().sendMessage(Text.literal("§eTrust Commands: /trust <player>, /untrust <player>"));
                     context.getSource().sendMessage(Text.literal("§eClan Commands: /clan create <name>, /clan invite <player>, /clan leave"));
@@ -88,6 +103,7 @@ public class CoreMod implements ModInitializer {
                     context.getSource().sendMessage(Text.literal("§eVoice Commands: /advancedgroups push <player> <group>, /advancedgroups release <player>"));
                     context.getSource().sendMessage(Text.literal("§eMap Commands: /minimap toggle, /map waypoint add <name> <x y z> <type> <visibility>, /map waypoint remove <name>, /map waypoint list, /map waypoint teleport <name>, /map waypoint share <name> <player>"));
                     context.getSource().sendMessage(Text.literal("§eAdmin Map Commands: /mapadmin listall, /mapadmin delete <name>, /mapadmin clear <player>"));
+                    context.getSource().sendMessage(Text.literal("§eWorld Commands: /spawn, /rtp [radius]"));
                     return 1;
                 })));
 
@@ -96,6 +112,7 @@ public class CoreMod implements ModInitializer {
                     .then(CommandManager.literal("push")
                         .then(CommandManager.argument("player", EntityArgumentType.player())
                             .then(CommandManager.argument("group", StringArgumentType.word())
+                                .suggests(VOICE_GROUP_SUGGESTIONS)
                                 .executes(context -> Safe.call("advancedgroups.push", () -> {
                                     ServerPlayerEntity target = EntityArgumentType.getPlayer(context, "player");
                                     String group = StringArgumentType.getString(context, "group");
@@ -124,6 +141,9 @@ public class CoreMod implements ModInitializer {
 
             LOGGER.info("Registering MenuCommands...");
             Safe.run("MenuCommands.register", () -> MenuCommands.register(dispatcher));
+
+            LOGGER.info("Registering WorldCommands...");
+            Safe.run("WorldCommands.register", () -> WorldCommands.register(dispatcher));
 
             if (ConfigManager.getConfig() != null && ConfigManager.getConfig().antiCheat.enableAntiCheat) {
                 LOGGER.info("Registering AntiCheatCommands...");

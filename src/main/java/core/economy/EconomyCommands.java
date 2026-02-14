@@ -94,6 +94,7 @@ public final class EconomyCommands {
         );
 
         dispatcher.register(CommandManager.literal("shop").executes(EconomyCommands::openShop));
+        dispatcher.register(CommandManager.literal("sell").executes(EconomyCommands::openSellGui));
 
         AuctionCommands.register(dispatcher);
         ShopAdminCommands.register(dispatcher);
@@ -217,6 +218,14 @@ public final class EconomyCommands {
         if (player == null) return 0;
 
         ShopGui.open(player);
+        return 1;
+    }
+
+    private static int openSellGui(CommandContext<ServerCommandSource> context) {
+        ServerPlayerEntity player = context.getSource().getPlayer();
+        if (player == null) return 0;
+
+        ShopGui.openSell(player);
         return 1;
     }
 

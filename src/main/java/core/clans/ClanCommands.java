@@ -1,12 +1,22 @@
 package core.clans;
 
 import com.mojang.brigadier.CommandDispatcher;
+import com.mojang.brigadier.suggestion.SuggestionProvider;
 import core.menu.MenuCommands;
+import net.minecraft.command.CommandSource;
 import net.minecraft.server.command.CommandManager;
 import net.minecraft.server.command.ServerCommandSource;
 import net.minecraft.text.Text;
 
+import java.util.ArrayList;
+import java.util.List;
+
 public class ClanCommands {
+    private static final SuggestionProvider<ServerCommandSource> CLAN_NAME_SUGGESTIONS = (context, builder) -> {
+        List<String> names = new ArrayList<>(ClanManager.getAllClans().keySet());
+        return CommandSource.suggestMatching(names, builder);
+    };
+
     public static void register(CommandDispatcher<ServerCommandSource> dispatcher) {
         dispatcher.register(CommandManager.literal("clan")
             .executes(context -> MenuCommands.openClansMenu(context.getSource()))
@@ -26,6 +36,7 @@ public class ClanCommands {
                         })))
             .then(CommandManager.literal("join")
                 .then(CommandManager.argument("name", com.mojang.brigadier.arguments.StringArgumentType.string())
+                    .suggests(CLAN_NAME_SUGGESTIONS)
                     .executes(context -> {
                         var player = context.getSource().getPlayer();
                         String name = com.mojang.brigadier.arguments.StringArgumentType.getString(context, "name");

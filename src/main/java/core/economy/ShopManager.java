@@ -17,6 +17,7 @@ import net.minecraft.item.ItemStack;
 import net.minecraft.registry.Registries;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.network.ServerPlayerEntity;
+import net.minecraft.text.Text;
 import net.minecraft.util.Identifier;
 import core.config.ConfigManager;
 import net.minecraft.command.permission.Permission;
@@ -28,6 +29,7 @@ import java.io.FileWriter;
 import java.io.IOException;
 import java.lang.reflect.Type;
 import java.math.BigDecimal;
+import java.lang.reflect.Method;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
@@ -44,8 +46,74 @@ public class ShopManager {
 
     private static final File SHOP_FILE = new File("shop.json");
     private static final ExecutorService EXECUTOR = Executors.newCachedThreadPool();
+    private static final Set<String> SHOP_EXCLUDED_ITEMS = Set.of(
+        "minecraft:air",
+        "minecraft:cave_air",
+        "minecraft:void_air",
+        "minecraft:barrier",
+        "minecraft:bedrock",
+        "minecraft:end_portal_frame",
+        "minecraft:end_portal",
+        "minecraft:end_gateway",
+        "minecraft:spawner",
+        "minecraft:trial_spawner",
+        "minecraft:vault",
+        "minecraft:ominous_vault",
+        "minecraft:budding_amethyst",
+        "minecraft:reinforced_deepslate",
+        "minecraft:petrified_oak_slab",
+        "minecraft:command_block",
+        "minecraft:chain_command_block",
+        "minecraft:repeating_command_block",
+        "minecraft:command_block_minecart",
+        "minecraft:structure_block",
+        "minecraft:structure_void",
+        "minecraft:jigsaw",
+        "minecraft:debug_stick",
+        "minecraft:light",
+        "minecraft:knowledge_book",
+        "minecraft:test_block",
+        "minecraft:test_instance_block"
+    );
+    private static final Set<String> ONE_PER_WORLD_ITEMS = Set.of(
+        "minecraft:dragon_egg"
+    );
+    private static final Map<String, String> CATEGORY_OVERRIDES = Map.ofEntries(
+        Map.entry("minecraft:torch", "FunctionalBlocks"),
+        Map.entry("minecraft:lantern", "FunctionalBlocks"),
+        Map.entry("minecraft:soul_lantern", "FunctionalBlocks"),
+        Map.entry("minecraft:chain", "FunctionalBlocks"),
+        Map.entry("minecraft:chest", "FunctionalBlocks"),
+        Map.entry("minecraft:ender_chest", "FunctionalBlocks"),
+        Map.entry("minecraft:barrel", "FunctionalBlocks"),
+        Map.entry("minecraft:hopper", "RedstoneBlocks"),
+        Map.entry("minecraft:trapped_chest", "RedstoneBlocks"),
+        Map.entry("minecraft:repeater", "RedstoneBlocks"),
+        Map.entry("minecraft:comparator", "RedstoneBlocks"),
+        Map.entry("minecraft:observer", "RedstoneBlocks"),
+        Map.entry("minecraft:piston", "RedstoneBlocks"),
+        Map.entry("minecraft:sticky_piston", "RedstoneBlocks"),
+        Map.entry("minecraft:elytra", "Utilities"),
+        Map.entry("minecraft:saddle", "Utilities"),
+        Map.entry("minecraft:name_tag", "Utilities"),
+        Map.entry("minecraft:totem_of_undying", "Utilities")
+    );
 
     private static final Map<String, ShopItem> shopItems = new ConcurrentHashMap<>();
+    private static final Map<String, String> CREATIVE_CATEGORY_BY_ITEM = new ConcurrentHashMap<>();
+    private static final Map<String, Integer> CREATIVE_ORDER_BY_ITEM = new ConcurrentHashMap<>();
+    private static final List<String> CATEGORY_ORDER = List.of(
+        "BuildingBlocks",
+        "ColoredBlocks",
+        "NaturalBlocks",
+        "FunctionalBlocks",
+        "RedstoneBlocks",
+        "ToolsAndCombat",
+        "FoodAndDrinks",
+        "Ingredients",
+        "SpawnEggs",
+        "Utilities"
+    );
 
     public enum BuyResult {
         SUCCESS,
@@ -61,6 +129,7 @@ public class ShopManager {
         public double sellPrice;
         public int stock;
         public String category;
+        public boolean categoryLocked;
         public int minPermissionLevel;
 
         public ShopItem(String itemId, double buyPrice, double sellPrice, int stock) {
@@ -69,6 +138,7 @@ public class ShopManager {
             this.sellPrice = sellPrice;
             this.stock = stock;
             this.category = "General";
+            this.categoryLocked = false;
             this.minPermissionLevel = 0;
         }
     }
@@ -80,22 +150,303 @@ public class ShopManager {
     }
 
     private static void initializeDefaultShop() {
-        // Add some default items
-        // Use stock = -1 to indicate infinite stock.
-        shopItems.put("minecraft:diamond", new ShopItem("minecraft:diamond", 100.0, 80.0, -1));
-        shopItems.put("minecraft:iron_ingot", new ShopItem("minecraft:iron_ingot", 10.0, 8.0, -1));
-        shopItems.put("minecraft:gold_ingot", new ShopItem("minecraft:gold_ingot", 50.0, 40.0, -1));
-        shopItems.put("minecraft:coal", new ShopItem("minecraft:coal", 2.0, 1.5, -1));
+        sanitizeCatalog();
+    }
 
-        shopItems.get("minecraft:diamond").category = "Materials";
-        shopItems.get("minecraft:iron_ingot").category = "Materials";
-        shopItems.get("minecraft:gold_ingot").category = "Materials";
-        shopItems.get("minecraft:coal").category = "Materials";
+    private static void ensureAllEligibleItemsPresent() {
+        int added = 0;
+        for (Identifier id : Registries.ITEM.getIds()) {
+            String itemId = id.toString();
+            if (!canBeSoldInShop(itemId)) continue;
+            if (shopItems.containsKey(itemId)) continue;
+
+            ShopItem generated = generateShopItem(itemId);
+            shopItems.put(itemId, generated);
+            added++;
+        }
+        if (added > 0) {
+            LOGGER.info("Added {} missing items to shop catalog", added);
+        }
+    }
+
+    private static void sanitizeCatalog() {
+        refreshCreativeCatalogIndex();
+        pruneIneligibleItems();
+        recategorizeCatalog();
+        ensureAllEligibleItemsPresent();
+    }
+
+    public static int recategorizeAllNow() {
+        sanitizeCatalog();
+        saveShop(null);
+        return shopItems.size();
+    }
+
+    private static void refreshCreativeCatalogIndex() {
+        CREATIVE_CATEGORY_BY_ITEM.clear();
+        CREATIVE_ORDER_BY_ITEM.clear();
+        int order = 0;
+        try {
+            Class<?> itemGroupsClass = Class.forName("net.minecraft.item.ItemGroups");
+            Method getGroups = itemGroupsClass.getMethod("getGroups");
+            Object groupsObj = getGroups.invoke(null);
+            if (!(groupsObj instanceof List<?> groups)) return;
+
+            for (Object group : groups) {
+                if (group == null) continue;
+                String category = mapCreativeGroupToCategory(group);
+                if (category == null) continue;
+
+                Collection<?> displayStacks = invokeStackCollection(group, "getDisplayStacks");
+                if (displayStacks == null || displayStacks.isEmpty()) {
+                    displayStacks = invokeStackCollection(group, "getSearchTabStacks");
+                }
+                if (displayStacks == null) continue;
+
+                for (Object obj : displayStacks) {
+                    if (!(obj instanceof ItemStack stack) || stack.isEmpty()) continue;
+                    String itemId = Registries.ITEM.getId(stack.getItem()).toString();
+                    CREATIVE_CATEGORY_BY_ITEM.putIfAbsent(itemId, category);
+                    CREATIVE_ORDER_BY_ITEM.putIfAbsent(itemId, order++);
+                }
+            }
+        } catch (Exception e) {
+            LOGGER.debug("Could not read creative tab order, fallback categorization will be used", e);
+        }
+    }
+
+    private static Collection<?> invokeStackCollection(Object target, String methodName) {
+        try {
+            Method method = target.getClass().getMethod(methodName);
+            Object result = method.invoke(target);
+            if (result instanceof Collection<?> collection) {
+                return collection;
+            }
+        } catch (Exception ignored) {
+        }
+        return null;
+    }
+
+    private static String mapCreativeGroupToCategory(Object group) {
+        String byId = mapCreativeGroupIdToCategory(group);
+        if (byId != null) return byId;
+        try {
+            Method getDisplayName = group.getClass().getMethod("getDisplayName");
+            Object textObj = getDisplayName.invoke(group);
+            String name = textObj instanceof Text text
+                ? text.getString().toLowerCase(Locale.ROOT)
+                : String.valueOf(textObj).toLowerCase(Locale.ROOT);
+
+            if (name.contains("building")) return "BuildingBlocks";
+            if (name.contains("colored")) return "ColoredBlocks";
+            if (name.contains("natural")) return "NaturalBlocks";
+            if (name.contains("functional")) return "FunctionalBlocks";
+            if (name.contains("redstone")) return "RedstoneBlocks";
+            if (name.contains("combat") || name.contains("tool")) return "ToolsAndCombat";
+            if (name.contains("food")) return "FoodAndDrinks";
+            if (name.contains("ingredient")) return "Ingredients";
+            if (name.contains("spawn")) return "SpawnEggs";
+            if (name.contains("operator") || name.contains("inventory")) return null;
+            return "Utilities";
+        } catch (Exception ignored) {
+            return null;
+        }
+    }
+
+    private static String mapCreativeGroupIdToCategory(Object group) {
+        try {
+            Method getId = group.getClass().getMethod("getId");
+            Object idObj = getId.invoke(group);
+            String id = String.valueOf(idObj).toLowerCase(Locale.ROOT);
+            if (id.contains("operator") || id.contains("inventory")) return null;
+            if (id.contains("building")) return "BuildingBlocks";
+            if (id.contains("colored")) return "ColoredBlocks";
+            if (id.contains("natural")) return "NaturalBlocks";
+            if (id.contains("functional")) return "FunctionalBlocks";
+            if (id.contains("redstone")) return "RedstoneBlocks";
+            if (id.contains("combat") || id.contains("tools")) return "ToolsAndCombat";
+            if (id.contains("food")) return "FoodAndDrinks";
+            if (id.contains("ingredients")) return "Ingredients";
+            if (id.contains("spawn")) return "SpawnEggs";
+            return null;
+        } catch (Exception ignored) {
+            return null;
+        }
+    }
+
+    private static boolean canBeSoldInShop(String itemId) {
+        if (itemId == null || itemId.isBlank()) return false;
+        if (SHOP_EXCLUDED_ITEMS.contains(itemId)) return false;
+        if (isOnePerWorldItem(itemId)) return false;
+        String lower = itemId.toLowerCase(Locale.ROOT);
+        if (lower.contains("command_block") || lower.contains("structure_block")) return false;
+        if (lower.contains("jigsaw") || lower.contains("debug")) return false;
+        if (lower.contains("test_")) return false;
+        if (lower.contains("portal") || lower.contains("gateway")) return false;
+        if (lower.contains("barrier") || lower.contains("bedrock")) return false;
+        if (lower.contains("spawner") || lower.contains("trial_spawner")) return false;
+        if (lower.contains("reinforced_deepslate") || lower.contains("budding_amethyst")) return false;
+        if (lower.contains("petrified_oak_slab") || lower.contains("knowledge_book") || lower.contains("light")) return false;
+        return Registries.ITEM.containsId(Identifier.of(itemId));
+    }
+
+    public static boolean isOnePerWorldItem(String itemId) {
+        return itemId != null && ONE_PER_WORLD_ITEMS.contains(itemId);
+    }
+
+    private static void pruneIneligibleItems() {
+        int before = shopItems.size();
+        shopItems.entrySet().removeIf(e -> !canBeSoldInShop(e.getKey()));
+        int removed = before - shopItems.size();
+        if (removed > 0) {
+            LOGGER.info("Removed {} ineligible items from shop catalog", removed);
+        }
+    }
+
+    private static void recategorizeCatalog() {
+        for (ShopItem item : shopItems.values()) {
+            if (item == null || item.itemId == null) continue;
+            if (!Registries.ITEM.containsId(Identifier.of(item.itemId))) continue;
+            if (item.categoryLocked && item.category != null && !item.category.isBlank()) {
+                item.category = normalizeCategory(item.category);
+                continue;
+            }
+            int maxCount = Math.max(1, Registries.ITEM.get(Identifier.of(item.itemId)).getMaxCount());
+            item.category = normalizeCategory(guessCategory(item.itemId, maxCount));
+        }
+    }
+
+    private static ShopItem generateShopItem(String itemId) {
+        Item item = Registries.ITEM.get(Identifier.of(itemId));
+        int maxCount = Math.max(1, item.getMaxCount());
+        double buy = estimateBuyPrice(itemId, maxCount);
+        double sell = Math.max(0.01, round2(buy * 0.70));
+        ShopItem entry = new ShopItem(itemId, buy, sell, -1);
+        entry.category = normalizeCategory(guessCategory(itemId, maxCount));
+        entry.minPermissionLevel = 0;
+        return entry;
+    }
+
+    private static double estimateBuyPrice(String itemId, int maxCount) {
+        String id = itemId.toLowerCase(Locale.ROOT);
+        if (id.contains("netherite")) return 1800.0;
+        if (id.contains("elytra")) return 2500.0;
+        if (id.contains("totem")) return 1200.0;
+        if (id.contains("beacon")) return 2000.0;
+        if (id.contains("dragon_egg")) return 5000.0;
+        if (id.contains("diamond")) return 250.0;
+        if (id.contains("emerald")) return 180.0;
+        if (id.contains("gold")) return 40.0;
+        if (id.contains("iron")) return 16.0;
+        if (id.contains("spawn_egg")) return 750.0;
+        if (maxCount == 1) return 120.0;
+        if (maxCount <= 16) return 36.0;
+        return 12.0;
+    }
+
+    private static String guessCategory(String itemId, int maxCount) {
+        String override = CATEGORY_OVERRIDES.get(itemId);
+        if (override != null) return override;
+
+        String creativeCategory = CREATIVE_CATEGORY_BY_ITEM.get(itemId);
+        if (creativeCategory != null) return creativeCategory;
+
+        String id = itemId.toLowerCase(Locale.ROOT);
+        if (id.contains("spawn_egg")) return "SpawnEggs";
+
+        if (id.contains("sword") || id.contains("axe") || id.contains("pickaxe") || id.contains("shovel")
+            || id.contains("hoe") || id.contains("bow") || id.contains("crossbow") || id.contains("trident")
+            || id.contains("shield") || id.contains("mace")
+            || id.contains("helmet") || id.contains("chestplate") || id.contains("leggings") || id.contains("boots")) {
+            return "ToolsAndCombat";
+        }
+
+        if (id.contains("apple") || id.contains("bread") || id.contains("stew") || id.contains("beef")
+            || id.contains("chicken") || id.contains("pork") || id.contains("fish") || id.contains("carrot")
+            || id.contains("potato") || id.contains("melon_slice") || id.contains("cookie")
+            || id.contains("pumpkin_pie") || id.contains("golden_apple") || id.contains("honey_bottle")
+            || id.contains("suspicious_stew")) {
+            return "FoodAndDrinks";
+        }
+
+        if (id.contains("redstone") || id.contains("repeater") || id.contains("comparator") || id.contains("observer")
+            || id.contains("piston") || id.contains("hopper") || id.contains("target") || id.contains("daylight_detector")
+            || id.contains("lectern") || id.contains("tripwire") || id.contains("lever") || id.contains("button")
+            || id.contains("pressure_plate") || id.contains("sculk_sensor")) {
+            return "RedstoneBlocks";
+        }
+
+        if (id.contains("bed") || id.contains("banner") || id.contains("wool") || id.contains("carpet")
+            || id.contains("terracotta") || id.contains("concrete") || id.contains("stained_glass")
+            || id.contains("glazed_terracotta")) {
+            return "ColoredBlocks";
+        }
+
+        if (id.contains("sapling") || id.contains("leaves") || id.contains("log") || id.contains("wood")
+            || id.contains("mushroom") || id.contains("flower") || id.contains("grass") || id.contains("dirt")
+            || id.contains("sand") || id.contains("gravel") || id.contains("ice") || id.contains("snow")
+            || id.contains("coral") || id.contains("clay") || id.contains("ore") || id.contains("stone")
+            || id.contains("deepslate") || id.contains("netherrack") || id.contains("end_stone") || id.contains("obsidian")) {
+            return "NaturalBlocks";
+        }
+
+        if (id.contains("crafting_table") || id.contains("furnace") || id.contains("anvil") || id.contains("smithing")
+            || id.contains("cartography") || id.contains("loom") || id.contains("stonecutter") || id.contains("grindstone")
+            || id.contains("enchanting_table") || id.contains("brewing_stand") || id.contains("barrel")
+            || id.contains("chest") || id.contains("shulker_box") || id.contains("beacon") || id.contains("respawn_anchor")
+            || id.contains("lodestone")) {
+            return "FunctionalBlocks";
+        }
+
+        if (id.contains("ingot") || id.contains("nugget") || id.contains("gem") || id.contains("dust")
+            || id.contains("shard") || id.contains("crystal") || id.contains("rod") || id.contains("string")
+            || id.contains("flint") || id.contains("feather") || id.contains("leather") || id.contains("paper")
+            || id.contains("book") || id.contains("bottle") || id.contains("dye") || id.contains("seed")
+            || id.contains("wart") || id.contains("slime_ball") || id.contains("blaze_rod")
+            || id.contains("ender_pearl")) {
+            return "Ingredients";
+        }
+
+        if (id.contains("bucket") || id.contains("boat") || id.contains("minecart") || id.contains("compass")
+            || id.contains("clock") || id.contains("lead") || id.contains("elytra") || id.contains("totem")
+            || id.contains("firework") || id.contains("name_tag") || id.contains("saddle")) {
+            return "Utilities";
+        }
+
+        if (maxCount == 64 || id.endsWith("_slab") || id.endsWith("_stairs") || id.endsWith("_wall")) {
+            return "BuildingBlocks";
+        }
+        return "Utilities";
+    }
+
+    private static String normalizeCategory(String category) {
+        if (category == null || category.isBlank()) return "Utilities";
+        String key = category.trim().toLowerCase(Locale.ROOT);
+        return switch (key) {
+            case "general", "misc", "materials", "utility" -> "Utilities";
+            case "blocks", "building" -> "BuildingBlocks";
+            case "colored" -> "ColoredBlocks";
+            case "natural" -> "NaturalBlocks";
+            case "functional" -> "FunctionalBlocks";
+            case "redstone" -> "RedstoneBlocks";
+            case "tools", "combat", "armor" -> "ToolsAndCombat";
+            case "food" -> "FoodAndDrinks";
+            default -> category;
+        };
+    }
+
+    public static int getCreativeOrder(String itemId) {
+        if (itemId == null) return Integer.MAX_VALUE;
+        return CREATIVE_ORDER_BY_ITEM.getOrDefault(itemId, Integer.MAX_VALUE);
+    }
+
+    private static double round2(double value) {
+        return Math.round(value * 100.0) / 100.0;
     }
 
     private static void normalizeItem(ShopItem item) {
         if (item == null) return;
-        if (item.category == null || item.category.isBlank()) item.category = "General";
+        item.category = normalizeCategory(item.category);
         if (item.minPermissionLevel < 0) item.minPermissionLevel = 0;
         if (item.minPermissionLevel > 4) item.minPermissionLevel = 4;
     }
@@ -210,12 +561,13 @@ public class ShopManager {
         try {
             if (itemId == null || itemId.isBlank()) return UpsertResult.INVALID_ITEM;
             if (buyPrice < 0 || sellPrice < 0) return UpsertResult.INVALID_PRICE;
+            if (!canBeSoldInShop(itemId)) return UpsertResult.INVALID_ITEM;
 
             Identifier id = Identifier.of(itemId);
             if (!Registries.ITEM.containsId(id)) return UpsertResult.INVALID_ITEM;
 
             ShopItem item = new ShopItem(itemId, buyPrice, sellPrice, stock);
-            item.category = category;
+            item.category = normalizeCategory(category);
             item.minPermissionLevel = minPermissionLevel;
             normalizeItem(item);
             shopItems.put(itemId, item);
@@ -244,8 +596,19 @@ public class ShopManager {
         ShopItem item = shopItems.get(itemId);
         normalizeItem(item);
         if (item == null) return false;
-        item.category = category;
+        item.category = normalizeCategory(category);
+        item.categoryLocked = true;
         normalizeItem(item);
+        saveShop(null);
+        return true;
+    }
+
+    public static boolean unlockCategory(String itemId) {
+        if (itemId == null) return false;
+        ShopItem item = shopItems.get(itemId);
+        normalizeItem(item);
+        if (item == null) return false;
+        item.categoryLocked = false;
         saveShop(null);
         return true;
     }
@@ -297,6 +660,7 @@ public class ShopManager {
                         }
                         shopItems.putAll(loadedItems);
                     }
+                    sanitizeCatalog();
                     LOGGER.info("Loaded {} shop items", shopItems.size());
                 }
             } catch (Exception e) {
@@ -322,6 +686,27 @@ public class ShopManager {
             .peek(ShopManager::normalizeItem)
             .map(item -> item.category)
             .distinct()
+            .sorted((a, b) -> {
+                int ia = CATEGORY_ORDER.indexOf(a);
+                int ib = CATEGORY_ORDER.indexOf(b);
+                if (ia < 0) ia = Integer.MAX_VALUE;
+                if (ib < 0) ib = Integer.MAX_VALUE;
+                if (ia != ib) return Integer.compare(ia, ib);
+                return String.CASE_INSENSITIVE_ORDER.compare(a, b);
+            })
+            .toList();
+    }
+
+    public static List<String> getNonSurvivalItemsInCatalog() {
+        return shopItems.keySet().stream()
+            .filter(itemId -> !canBeSoldInShop(itemId))
+            .sorted(String.CASE_INSENSITIVE_ORDER)
+            .toList();
+    }
+
+    public static List<String> getOnePerWorldItemsInCatalog() {
+        return shopItems.keySet().stream()
+            .filter(ShopManager::isOnePerWorldItem)
             .sorted(String.CASE_INSENSITIVE_ORDER)
             .toList();
     }

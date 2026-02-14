@@ -24,6 +24,7 @@ public final class CoreMenuScreenHandler extends CommandMenuScreenHandler {
         setEntry(20, named(Items.WHITE_BANNER, "Clans"), "/clan");
         setEntry(21, named(Items.PLAYER_HEAD, "Bounties"), "/bounty list");
         setEntry(22, named(Items.NAME_TAG, "Wanted"), "/wanted list");
+        setEntry(23, named(Items.BOOK, "Help"), "/core help");
     }
 
     private static ItemStack named(net.minecraft.item.Item item, String name) {

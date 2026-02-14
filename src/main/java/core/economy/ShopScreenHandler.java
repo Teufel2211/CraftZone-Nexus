@@ -63,6 +63,10 @@ public final class ShopScreenHandler extends ScreenHandler {
     private int pendingQuantity;
 
     public ShopScreenHandler(int syncId, PlayerInventory playerInventory) {
+        this(syncId, playerInventory, false);
+    }
+
+    public ShopScreenHandler(int syncId, PlayerInventory playerInventory, boolean startSellMode) {
         super(ScreenHandlerType.GENERIC_9X6, syncId);
         this.playerInventory = playerInventory;
 
@@ -72,6 +76,9 @@ public final class ShopScreenHandler extends ScreenHandler {
 
         addShopSlots();
         addPlayerSlots(playerInventory);
+        if (startSellMode) {
+            mode = Mode.SELL;
+        }
         render();
     }
 
@@ -160,7 +167,13 @@ public final class ShopScreenHandler extends ScreenHandler {
         List<ShopManager.ShopItem> filtered = items.values().stream()
             .filter(i -> i != null && i.itemId != null)
             .filter(i -> i.category != null && i.category.equalsIgnoreCase(selectedCategory))
-            .sorted(Comparator.comparing(i -> i.itemId))
+            .sorted(Comparator
+                .comparingInt((ShopManager.ShopItem i) -> ShopManager.getCreativeOrder(i.itemId))
+                .thenComparing(i -> {
+                    Item item = Registries.ITEM.get(Identifier.of(i.itemId));
+                    return item.getName().getString();
+                }, String.CASE_INSENSITIVE_ORDER)
+                .thenComparing(i -> i.itemId))
             .collect(Collectors.toList());
 
         int pageSize = DISPLAY_SIZE;
@@ -242,10 +255,10 @@ public final class ShopScreenHandler extends ScreenHandler {
             guiInventory.setStack(BTN_SELL, sellNow);
             slotTokens.set(BTN_SELL, "btn:sellnow");
         } else {
-            ItemStack sell = new ItemStack(Items.HOPPER);
-            sell.set(DataComponentTypes.CUSTOM_NAME, Text.literal("§eSell"));
-            guiInventory.setStack(BTN_SELL, sell);
-            slotTokens.set(BTN_SELL, "btn:sell");
+            ItemStack sellDisabled = new ItemStack(Items.BARRIER);
+            sellDisabled.set(DataComponentTypes.CUSTOM_NAME, Text.literal("§7Selling disabled in /shop"));
+            guiInventory.setStack(BTN_SELL, sellDisabled);
+            slotTokens.set(BTN_SELL, "btn:sell_hint");
         }
 
         ItemStack qtyMinus = new ItemStack(Items.RED_DYE);
@@ -310,11 +323,8 @@ public final class ShopScreenHandler extends ScreenHandler {
                     mode = Mode.CATEGORIES;
                     render();
                 }
-                case "btn:sell" -> {
-                    pendingItemId = null;
-                    pendingQuantity = 0;
-                    mode = Mode.SELL;
-                    render();
+                case "btn:sell_hint" -> {
+                    player.sendMessage(Text.literal("§eSelling from /shop is disabled. Use §f/sell §einstead."), false);
                 }
                 case "btn:sellnow" -> {
                     if (mode != Mode.SELL) return;
@@ -508,11 +518,16 @@ public final class ShopScreenHandler extends ScreenHandler {
     private static ItemStack categoryIcon(String category) {
         String normalized = category == null ? "" : category.trim().toLowerCase(Locale.ROOT);
         return switch (normalized) {
-            case "materials" -> new ItemStack(Items.IRON_INGOT);
-            case "blocks" -> new ItemStack(Items.STONE);
-            case "tools" -> new ItemStack(Items.IRON_PICKAXE);
-            case "food" -> new ItemStack(Items.BREAD);
-            case "redstone" -> new ItemStack(Items.REDSTONE);
+            case "buildingblocks" -> new ItemStack(Items.STONE);
+            case "coloredblocks" -> new ItemStack(Items.CYAN_WOOL);
+            case "naturalblocks" -> new ItemStack(Items.GRASS_BLOCK);
+            case "functionalblocks" -> new ItemStack(Items.CRAFTING_TABLE);
+            case "redstoneblocks" -> new ItemStack(Items.REDSTONE);
+            case "toolsandcombat" -> new ItemStack(Items.IRON_SWORD);
+            case "foodanddrinks" -> new ItemStack(Items.BREAD);
+            case "ingredients" -> new ItemStack(Items.IRON_INGOT);
+            case "spawneggs" -> new ItemStack(Items.CHICKEN_SPAWN_EGG);
+            case "utilities" -> new ItemStack(Items.COMPASS);
             default -> new ItemStack(Items.CHEST);
         };
     }
