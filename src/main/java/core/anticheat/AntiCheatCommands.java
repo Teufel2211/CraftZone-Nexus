@@ -42,6 +42,24 @@ public class AntiCheatCommands {
                         context.getSource().sendMessage(Text.literal("Violations reset"));
                         return 1;
                     })))
+            .then(CommandManager.literal("freeze")
+                .requires(AntiCheatCommands::isAdmin)
+                .then(CommandManager.argument("player", EntityArgumentType.player())
+                    .executes(context -> {
+                        var player = EntityArgumentType.getPlayer(context, "player");
+                        AntiCheatManager.freezePlayer(player.getUuid());
+                        context.getSource().sendMessage(Text.literal("Player frozen."));
+                        return 1;
+                    })))
+            .then(CommandManager.literal("unfreeze")
+                .requires(AntiCheatCommands::isAdmin)
+                .then(CommandManager.argument("player", EntityArgumentType.player())
+                    .executes(context -> {
+                        var player = EntityArgumentType.getPlayer(context, "player");
+                        AntiCheatManager.unfreezePlayer(player.getUuid());
+                        context.getSource().sendMessage(Text.literal("Player unfrozen."));
+                        return 1;
+                    })))
             .then(CommandManager.literal("ignore")
                 .requires(AntiCheatCommands::isAdmin)
                 .then(CommandManager.literal("add")

@@ -20,6 +20,11 @@ import org.slf4j.LoggerFactory;
 import core.config.ConfigManager;
 import core.bounty.BountyManager;
 import core.economy.EconomyManager;
+import core.anticheat.AntiCheatManager;
+import core.logging.LoggingManager;
+import core.claims.ClaimManager;
+import core.clans.ClanManager;
+import core.moderation.ModerationManager;
 import core.util.Safe;
 
 import java.io.File;
@@ -33,10 +38,13 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.time.Instant;
+import java.util.Arrays;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 public class DiscordManager {
     private static final Logger LOGGER = LoggerFactory.getLogger("core");
@@ -52,12 +60,18 @@ public class DiscordManager {
     private static final int WEBHOOK_MAX_RETRIES = 3;
     private static final long WEBHOOK_RETRY_DELAY_MS = 400L;
     private static final long DEDUPE_WINDOW_MS = 1500L;
+    private static final Pattern RETRY_AFTER_PATTERN = Pattern.compile("\"retry_after\"\\s*:\\s*([0-9]+(?:\\.[0-9]+)?)");
+    private static final Pattern EVENT_LINE_PATTERN = Pattern.compile("^\\[(?<time>[^\\]]+)]\\s*(?<type>[A-Z_]+):\\s*(?<player>[^\\-]+?)(?:\\s*-\\s*(?<details>.*))?$");
+    private static final Pattern COMMAND_LINE_PATTERN = Pattern.compile("^\\[(?<time>[^\\]]+)]\\s*(?<player>.+?)\\s+executed:\\s*(?<command>.+)$");
+    private static final Pattern CHAT_LINE_PATTERN = Pattern.compile("^\\[(?<time>[^\\]]+)]\\s*(?<player>[^:]+):\\s*(?<message>.*)$");
+    private static final List<String> FIELD_ORDER = List.of("Time", "Type", "Player", "Command", "Details", "Message", "Reason", "Amount", "Action", "Target");
 
     private static JDA jda;
     private static volatile boolean botStarted = false;
     private static final Map<String, UUID> discordToMinecraft = new ConcurrentHashMap<>();
     private static final Map<UUID, String> minecraftToDiscord = new ConcurrentHashMap<>();
     private static final Map<String, Long> webhookDedupe = new ConcurrentHashMap<>();
+    private static final Map<String, Long> webhookRateLimitUntil = new ConcurrentHashMap<>();
     private static MinecraftServer server;
 
     public static void init() {
@@ -119,7 +133,61 @@ public class DiscordManager {
             Commands.slash("bounty", "Bounty commands")
                 .addOption(OptionType.STRING, "action", "Action (place/list)", true)
                 .addOption(OptionType.STRING, "player", "Target player", false)
-                .addOption(OptionType.NUMBER, "amount", "Bounty amount", false)
+                .addOption(OptionType.NUMBER, "amount", "Bounty amount", false),
+            Commands.slash("status", "Show live server status"),
+            Commands.slash("players", "Show currently online players"),
+            Commands.slash("announce", "Send in-game announcement")
+                .addOption(OptionType.STRING, "message", "Announcement text", true)
+                .addOption(OptionType.STRING, "mode", "chat/actionbar/both", false),
+            Commands.slash("servercmd", "Execute allowed server command")
+                .addOption(OptionType.STRING, "command", "Command without leading slash", true),
+            Commands.slash("events", "Show latest server events")
+                .addOption(OptionType.INTEGER, "limit", "How many (1-15)", false)
+                .addOption(OptionType.STRING, "channel", "all/event/chat/command/private/game", false),
+            Commands.slash("topcommands", "Top used commands from recent logs"),
+            Commands.slash("playerinfo", "Show details for an online player")
+                .addOption(OptionType.STRING, "name", "Exact player name", true),
+            Commands.slash("inventory", "Show online player's inventory summary")
+                .addOption(OptionType.STRING, "name", "Exact player name", true),
+            Commands.slash("enderchest", "Show online player's ender chest summary")
+                .addOption(OptionType.STRING, "name", "Exact player name", true),
+            Commands.slash("kick", "Kick a player")
+                .addOption(OptionType.STRING, "player", "Player name", true)
+                .addOption(OptionType.STRING, "reason", "Reason", false),
+            Commands.slash("gamemode", "Set player's gamemode")
+                .addOption(OptionType.STRING, "player", "Player name", true)
+                .addOption(OptionType.STRING, "mode", "survival/creative/adventure/spectator", true),
+            Commands.slash("freeze", "Freeze player via anti-cheat")
+                .addOption(OptionType.STRING, "player", "Player name", true),
+            Commands.slash("unfreeze", "Unfreeze player via anti-cheat")
+                .addOption(OptionType.STRING, "player", "Player name", true),
+            Commands.slash("setbalance", "Set player coin balance")
+                .addOption(OptionType.STRING, "player", "Player name", true)
+                .addOption(OptionType.NUMBER, "amount", "New balance", true),
+            Commands.slash("whitelist", "Whitelist on/off/add/remove")
+                .addOption(OptionType.STRING, "action", "on/off/add/remove", true)
+                .addOption(OptionType.STRING, "player", "Player name for add/remove", false),
+            Commands.slash("serveroverview", "High-level admin overview")
+            ,
+            Commands.slash("saveall", "Run save-all on the server"),
+            Commands.slash("op", "OP a player")
+                .addOption(OptionType.STRING, "player", "Player name", true),
+            Commands.slash("deop", "De-OP a player")
+                .addOption(OptionType.STRING, "player", "Player name", true),
+            Commands.slash("pardon", "Unban a player")
+                .addOption(OptionType.STRING, "player", "Player name", true)
+            ,
+            Commands.slash("economytop", "Top coin balances"),
+            Commands.slash("economy", "Economy info for an online player")
+                .addOption(OptionType.STRING, "player", "Player name", true),
+            Commands.slash("claims", "Claims overview (count + sample)"),
+            Commands.slash("clans", "Clans overview (count + sample)"),
+            Commands.slash("note", "Add moderation note to online player")
+                .addOption(OptionType.STRING, "player", "Player name", true)
+                .addOption(OptionType.STRING, "text", "Note text", true),
+            Commands.slash("warn", "Add warning to online player")
+                .addOption(OptionType.STRING, "player", "Player name", true)
+                .addOption(OptionType.STRING, "reason", "Warn reason", true)
         ).queue(
             ignored -> LOGGER.info("Discord slash commands registered"),
             error -> LOGGER.warn("Failed to register discord slash commands", error)
@@ -232,10 +300,44 @@ public class DiscordManager {
                 .build();
 
             for (int attempt = 1; attempt <= WEBHOOK_MAX_RETRIES; attempt++) {
+                long now = System.currentTimeMillis();
+                long blockedUntil = webhookRateLimitUntil.getOrDefault(webhookUrl, 0L);
+                if (blockedUntil > now) {
+                    long waitMs = blockedUntil - now;
+                    try {
+                        Thread.sleep(waitMs);
+                    } catch (InterruptedException ignored) {
+                        Thread.currentThread().interrupt();
+                        return;
+                    }
+                }
+
                 try (Response response = CLIENT.newCall(request).execute()) {
                     if (response.isSuccessful()) {
                         return;
                     }
+
+                    if (response.code() == 429) {
+                        String bodyText = "";
+                        try {
+                            if (response.body() != null) {
+                                bodyText = response.body().string();
+                            }
+                        } catch (IOException ignored) {
+                        }
+                        long retryMs = parseRetryDelayMs(response.header("Retry-After"), bodyText);
+                        long until = System.currentTimeMillis() + retryMs;
+                        webhookRateLimitUntil.put(webhookUrl, until);
+                        LOGGER.warn("Discord webhook rate-limited (HTTP 429). Waiting {} ms before retry.", retryMs);
+                        try {
+                            Thread.sleep(retryMs);
+                        } catch (InterruptedException ignored) {
+                            Thread.currentThread().interrupt();
+                            return;
+                        }
+                        continue;
+                    }
+
                     LOGGER.warn("Discord webhook failed (attempt {}): HTTP {}", attempt, response.code());
                 } catch (IOException e) {
                     LOGGER.warn("Discord webhook IO error (attempt {})", attempt, e);
@@ -251,6 +353,38 @@ public class DiscordManager {
                 }
             }
         });
+    }
+
+    private static long parseRetryDelayMs(String retryAfterHeader, String bodyText) {
+        long fallback = 1500L;
+        try {
+            if (retryAfterHeader != null && !retryAfterHeader.isBlank()) {
+                double value = Double.parseDouble(retryAfterHeader.trim());
+                if (value > 0) {
+                    // Discord may return seconds in header. Convert to ms.
+                    long ms = (long) Math.ceil(value * 1000.0);
+                    return Math.max(250L, ms);
+                }
+            }
+        } catch (NumberFormatException ignored) {
+        }
+
+        if (bodyText != null && !bodyText.isBlank()) {
+            Matcher m = RETRY_AFTER_PATTERN.matcher(bodyText);
+            if (m.find()) {
+                try {
+                    double value = Double.parseDouble(m.group(1));
+                    // Discord JSON retry_after is usually in ms for webhook rate limits.
+                    long ms = (long) Math.ceil(value);
+                    if (ms <= 0) return fallback;
+                    if (ms < 250) ms = 250;
+                    return ms;
+                } catch (NumberFormatException ignored) {
+                }
+            }
+        }
+
+        return fallback;
     }
 
     private static boolean isDuplicate(String webhookUrl, String title, String description) {
@@ -279,6 +413,33 @@ public class DiscordManager {
     private static List<Field> extractFields(String raw) {
         List<Field> out = new ArrayList<>();
         if (raw == null || raw.isBlank()) return out;
+
+        String firstLine = raw.split("\\R", 2)[0].trim();
+        Matcher eventMatcher = EVENT_LINE_PATTERN.matcher(firstLine);
+        if (eventMatcher.matches()) {
+            addField(out, "Time", eventMatcher.group("time"));
+            addField(out, "Type", eventMatcher.group("type"));
+            addField(out, "Player", eventMatcher.group("player"));
+            addField(out, "Details", eventMatcher.group("details"));
+            return out;
+        }
+
+        Matcher commandMatcher = COMMAND_LINE_PATTERN.matcher(firstLine);
+        if (commandMatcher.matches()) {
+            addField(out, "Time", commandMatcher.group("time"));
+            addField(out, "Player", commandMatcher.group("player"));
+            addField(out, "Command", commandMatcher.group("command"));
+            return out;
+        }
+
+        Matcher chatMatcher = CHAT_LINE_PATTERN.matcher(firstLine);
+        if (chatMatcher.matches()) {
+            addField(out, "Time", chatMatcher.group("time"));
+            addField(out, "Player", chatMatcher.group("player"));
+            addField(out, "Message", chatMatcher.group("message"));
+            return out;
+        }
+
         for (String line : raw.split("\\R")) {
             String trimmed = line.trim();
             if (trimmed.isEmpty()) continue;
@@ -293,7 +454,29 @@ public class DiscordManager {
             }
             if (out.size() >= 8) break;
         }
+        out.sort((a, b) -> {
+            int ia = fieldIndex(a.name);
+            int ib = fieldIndex(b.name);
+            if (ia != ib) return Integer.compare(ia, ib);
+            return a.name.compareToIgnoreCase(b.name);
+        });
         return out;
+    }
+
+    private static int fieldIndex(String name) {
+        if (name == null) return Integer.MAX_VALUE;
+        int idx = FIELD_ORDER.indexOf(name);
+        return idx < 0 ? Integer.MAX_VALUE : idx;
+    }
+
+    private static void addField(List<Field> out, String name, String value) {
+        if (value == null) return;
+        String n = name.trim();
+        String v = value.trim();
+        if (n.isEmpty() || v.isEmpty()) return;
+        if (n.length() > 64) n = n.substring(0, 64);
+        if (v.length() > 256) v = v.substring(0, 256);
+        out.add(new Field(n, v, true));
     }
 
     private static String resolveWebhook(String specificWebhook) {
@@ -356,7 +539,8 @@ public class DiscordManager {
     private static class DiscordCommandListener extends ListenerAdapter {
         @Override
         public void onSlashCommandInteraction(SlashCommandInteractionEvent event) {
-            if (!ConfigManager.getConfig().discord.enableBidirectionalCommands) return;
+            var cfg = ConfigManager.getConfig();
+            if (cfg == null || cfg.discord == null || !cfg.discord.enableBidirectionalCommands) return;
 
             // Check if user has required role
             Member member = event.getMember();
@@ -379,6 +563,32 @@ public class DiscordManager {
                 case "ban" -> handleBanCommand(event);
                 case "eco" -> handleEcoCommand(event);
                 case "bounty" -> handleBountyCommand(event);
+                case "status" -> handleStatusCommand(event);
+                case "players" -> handlePlayersCommand(event);
+                case "announce" -> handleAnnounceCommand(event);
+                case "servercmd" -> handleServerCmdCommand(event);
+                case "events" -> handleEventsCommand(event);
+                case "topcommands" -> handleTopCommandsCommand(event);
+                case "playerinfo" -> handlePlayerInfoCommand(event);
+                case "inventory" -> handleInventoryCommand(event);
+                case "enderchest" -> handleEnderChestCommand(event);
+                case "kick" -> handleKickCommand(event);
+                case "gamemode" -> handleGamemodeCommand(event);
+                case "freeze" -> handleFreezeCommand(event);
+                case "unfreeze" -> handleUnfreezeCommand(event);
+                case "setbalance" -> handleSetBalanceCommand(event);
+                case "whitelist" -> handleWhitelistCommand(event);
+                case "serveroverview" -> handleServerOverviewCommand(event);
+                case "saveall" -> handleSaveAllCommand(event);
+                case "op" -> handleOpCommand(event);
+                case "deop" -> handleDeopCommand(event);
+                case "pardon" -> handlePardonCommand(event);
+                case "economytop" -> handleEconomyTopCommand(event);
+                case "economy" -> handleEconomyPlayerCommand(event);
+                case "claims" -> handleClaimsOverviewCommand(event);
+                case "clans" -> handleClansOverviewCommand(event);
+                case "note" -> handleNoteCommand(event);
+                case "warn" -> handleWarnCommand(event);
             }
         }
 
@@ -452,6 +662,553 @@ public class DiscordManager {
                 event.reply("Unknown action. Use: place or list").setEphemeral(true).queue();
             }
         }
+
+        private void handleStatusCommand(SlashCommandInteractionEvent event) {
+            if (server == null) {
+                event.reply("Server unavailable").setEphemeral(true).queue();
+                return;
+            }
+            event.reply("Online: " + server.getCurrentPlayerCount() + "/" + server.getMaxPlayerCount()
+                + "\nVersion: " + server.getVersion()
+                + "\nMOTD: " + server.getServerMotd()).queue();
+        }
+
+        private void handlePlayersCommand(SlashCommandInteractionEvent event) {
+            if (server == null) {
+                event.reply("Server unavailable").setEphemeral(true).queue();
+                return;
+            }
+            var players = server.getPlayerManager().getPlayerList();
+            if (players.isEmpty()) {
+                event.reply("No players online.").queue();
+                return;
+            }
+            String names = players.stream().map(p -> p.getName().getString()).sorted(String::compareToIgnoreCase).limit(25).reduce((a, b) -> a + ", " + b).orElse("-");
+            event.reply("Online players (" + players.size() + "): " + names).queue();
+        }
+
+        private void handleAnnounceCommand(SlashCommandInteractionEvent event) {
+            if (event.getOption("message") == null) {
+                event.reply("Missing message").setEphemeral(true).queue();
+                return;
+            }
+            String message = event.getOption("message").getAsString().replace('\n', ' ').trim();
+            if (message.isBlank()) {
+                event.reply("Message cannot be empty").setEphemeral(true).queue();
+                return;
+            }
+            String mode = event.getOption("mode") == null ? "chat" : event.getOption("mode").getAsString().trim().toLowerCase();
+            if (!mode.equals("chat") && !mode.equals("actionbar") && !mode.equals("both")) {
+                event.reply("Mode must be chat, actionbar, or both").setEphemeral(true).queue();
+                return;
+            }
+            if (server != null) {
+                String cmd = "announce " + mode + " " + message;
+                server.execute(() -> server.getCommandManager().parseAndExecute(server.getCommandSource(), cmd));
+            }
+            event.reply("Announcement sent (" + mode + ").").queue();
+            sendAdminActionLog("Discord announce by " + event.getUser().getEffectiveName() + "\nMode: " + mode + "\nMessage: " + message);
+        }
+
+        private void handleServerCmdCommand(SlashCommandInteractionEvent event) {
+            if (!ConfigManager.getConfig().discord.enableRemoteServerCommands) {
+                event.reply("Remote server commands are disabled in config.").setEphemeral(true).queue();
+                return;
+            }
+            if (event.getOption("command") == null) {
+                event.reply("Missing command").setEphemeral(true).queue();
+                return;
+            }
+            String cmd = event.getOption("command").getAsString().trim();
+            if (cmd.startsWith("/")) cmd = cmd.substring(1);
+            if (cmd.isBlank()) {
+                event.reply("Command cannot be empty").setEphemeral(true).queue();
+                return;
+            }
+            if (!isAllowedRemoteCommand(cmd)) {
+                event.reply("Command is not allowed by prefix policy.").setEphemeral(true).queue();
+                return;
+            }
+            if (server != null) {
+                String finalCmd = cmd;
+                server.execute(() -> server.getCommandManager().parseAndExecute(server.getCommandSource(), finalCmd));
+            }
+            event.reply("Executed: /" + cmd).queue();
+            sendAdminActionLog("Discord servercmd by " + event.getUser().getEffectiveName() + "\nCommand: /" + cmd);
+        }
+
+        private void handleEventsCommand(SlashCommandInteractionEvent event) {
+            int limit = event.getOption("limit") == null ? 8 : (int) event.getOption("limit").getAsLong();
+            limit = Math.max(1, Math.min(15, limit));
+            String channel = event.getOption("channel") == null ? "all" : event.getOption("channel").getAsString().trim().toLowerCase();
+            List<LoggingManager.RecentLogEntry> events = LoggingManager.getRecentLogs(150).stream()
+                .filter(e -> "all".equals(channel) || e.channel.equalsIgnoreCase(channel))
+                .limit(limit)
+                .toList();
+            if (events.isEmpty()) {
+                event.reply("No events found for channel `" + channel + "`.").setEphemeral(true).queue();
+                return;
+            }
+            StringBuilder sb = new StringBuilder();
+            for (var e : events) {
+                String msg = e.message.length() > 140 ? e.message.substring(0, 140) + "..." : e.message;
+                sb.append("`").append(e.channel).append("` ").append(msg).append("\n");
+            }
+            event.reply(sb.toString().trim()).setEphemeral(true).queue();
+        }
+
+        private void handleTopCommandsCommand(SlashCommandInteractionEvent event) {
+            Map<String, Integer> counts = new HashMap<>();
+            for (var e : LoggingManager.getRecentLogs(300)) {
+                if (!"command".equalsIgnoreCase(e.channel)) continue;
+                int idx = e.message.indexOf(" executed: ");
+                if (idx < 0) continue;
+                String cmd = e.message.substring(idx + " executed: ".length()).trim();
+                if (cmd.startsWith("/")) cmd = cmd.substring(1);
+                if (cmd.isBlank()) continue;
+                String root = cmd.split("\\s+")[0].toLowerCase();
+                counts.merge(root, 1, Integer::sum);
+            }
+            if (counts.isEmpty()) {
+                event.reply("No command activity in recent logs.").setEphemeral(true).queue();
+                return;
+            }
+            StringBuilder sb = new StringBuilder("Top commands (recent):\n");
+            counts.entrySet().stream()
+                .sorted((a, b) -> Integer.compare(b.getValue(), a.getValue()))
+                .limit(10)
+                .forEach(entry -> sb.append("• `/").append(entry.getKey()).append("` -> ").append(entry.getValue()).append("\n"));
+            event.reply(sb.toString().trim()).setEphemeral(true).queue();
+        }
+
+        private void handlePlayerInfoCommand(SlashCommandInteractionEvent event) {
+            if (server == null) {
+                event.reply("Server unavailable").setEphemeral(true).queue();
+                return;
+            }
+            if (event.getOption("name") == null) {
+                event.reply("Missing name").setEphemeral(true).queue();
+                return;
+            }
+            String name = event.getOption("name").getAsString().trim();
+            var player = server.getPlayerManager().getPlayer(name);
+            if (player == null) {
+                event.reply("Player `" + name + "` is offline or not found.").setEphemeral(true).queue();
+                return;
+            }
+            String world = player.getEntityWorld().getRegistryKey().getValue().toString();
+            String info = "Player: `" + player.getName().getString() + "`\n"
+                + "UUID: `" + player.getUuidAsString() + "`\n"
+                + "World: `" + world + "`\n"
+                + "Pos: `" + Math.round(player.getX()) + ", " + Math.round(player.getY()) + ", " + Math.round(player.getZ()) + "`\n"
+                + "Health: `" + Math.round(player.getHealth() * 10.0) / 10.0 + "`\n"
+                + "Gamemode: `" + player.interactionManager.getGameMode().asString() + "`";
+            event.reply(info).setEphemeral(true).queue();
+        }
+
+        private void handleInventoryCommand(SlashCommandInteractionEvent event) {
+            if (!ConfigManager.getConfig().discord.allowSensitivePlayerData) {
+                event.reply("Sensitive player data is disabled in config.").setEphemeral(true).queue();
+                return;
+            }
+            if (server == null || event.getOption("name") == null) {
+                event.reply("Server unavailable or invalid player name.").setEphemeral(true).queue();
+                return;
+            }
+            String name = event.getOption("name").getAsString().trim();
+            var player = server.getPlayerManager().getPlayer(name);
+            if (player == null) {
+                event.reply("Player `" + name + "` is offline.").setEphemeral(true).queue();
+                return;
+            }
+            String text = summarizeInventory(player.getInventory(), "Inventory");
+            event.reply(text).setEphemeral(true).queue();
+        }
+
+        private void handleEnderChestCommand(SlashCommandInteractionEvent event) {
+            if (!ConfigManager.getConfig().discord.allowSensitivePlayerData) {
+                event.reply("Sensitive player data is disabled in config.").setEphemeral(true).queue();
+                return;
+            }
+            if (server == null || event.getOption("name") == null) {
+                event.reply("Server unavailable or invalid player name.").setEphemeral(true).queue();
+                return;
+            }
+            String name = event.getOption("name").getAsString().trim();
+            var player = server.getPlayerManager().getPlayer(name);
+            if (player == null) {
+                event.reply("Player `" + name + "` is offline.").setEphemeral(true).queue();
+                return;
+            }
+            String text = summarizeInventory(player.getEnderChestInventory(), "Ender Chest");
+            event.reply(text).setEphemeral(true).queue();
+        }
+
+        private void handleKickCommand(SlashCommandInteractionEvent event) {
+            if (!ConfigManager.getConfig().discord.enableRemoteServerCommands) {
+                event.reply("Remote controls are disabled in config.").setEphemeral(true).queue();
+                return;
+            }
+            if (event.getOption("player") == null) {
+                event.reply("Missing player").setEphemeral(true).queue();
+                return;
+            }
+            String player = event.getOption("player").getAsString().trim();
+            String reason = event.getOption("reason") == null ? "No reason" : event.getOption("reason").getAsString().replace('\n', ' ').trim();
+            if (server != null) {
+                String cmd = "kick " + player + " " + reason;
+                server.execute(() -> server.getCommandManager().parseAndExecute(server.getCommandSource(), cmd));
+            }
+            event.reply("Kicked `" + player + "`").queue();
+            sendAdminActionLog("Discord kick by " + event.getUser().getEffectiveName() + "\nTarget: " + player + "\nReason: " + reason);
+        }
+
+        private void handleGamemodeCommand(SlashCommandInteractionEvent event) {
+            if (!ConfigManager.getConfig().discord.enableRemoteServerCommands) {
+                event.reply("Remote controls are disabled in config.").setEphemeral(true).queue();
+                return;
+            }
+            if (event.getOption("player") == null || event.getOption("mode") == null) {
+                event.reply("Missing player/mode").setEphemeral(true).queue();
+                return;
+            }
+            String player = event.getOption("player").getAsString().trim();
+            String mode = event.getOption("mode").getAsString().trim().toLowerCase();
+            if (!mode.equals("survival") && !mode.equals("creative") && !mode.equals("adventure") && !mode.equals("spectator")) {
+                event.reply("Invalid mode. Use survival/creative/adventure/spectator").setEphemeral(true).queue();
+                return;
+            }
+            if (server != null) {
+                String cmd = "gamemode " + mode + " " + player;
+                server.execute(() -> server.getCommandManager().parseAndExecute(server.getCommandSource(), cmd));
+            }
+            event.reply("Gamemode updated: `" + player + "` -> `" + mode + "`").queue();
+            sendAdminActionLog("Discord gamemode by " + event.getUser().getEffectiveName() + "\nTarget: " + player + "\nMode: " + mode);
+        }
+
+        private void handleFreezeCommand(SlashCommandInteractionEvent event) {
+            if (!ConfigManager.getConfig().discord.enableRemoteServerCommands) {
+                event.reply("Remote controls are disabled in config.").setEphemeral(true).queue();
+                return;
+            }
+            if (server == null || event.getOption("player") == null) {
+                event.reply("Server unavailable or player missing.").setEphemeral(true).queue();
+                return;
+            }
+            String name = event.getOption("player").getAsString().trim();
+            var player = server.getPlayerManager().getPlayer(name);
+            if (player == null) {
+                event.reply("Player `" + name + "` is offline.").setEphemeral(true).queue();
+                return;
+            }
+            AntiCheatManager.freezePlayer(player.getUuid());
+            event.reply("Player frozen: `" + name + "`").queue();
+        }
+
+        private void handleUnfreezeCommand(SlashCommandInteractionEvent event) {
+            if (!ConfigManager.getConfig().discord.enableRemoteServerCommands) {
+                event.reply("Remote controls are disabled in config.").setEphemeral(true).queue();
+                return;
+            }
+            if (server == null || event.getOption("player") == null) {
+                event.reply("Server unavailable or player missing.").setEphemeral(true).queue();
+                return;
+            }
+            String name = event.getOption("player").getAsString().trim();
+            var player = server.getPlayerManager().getPlayer(name);
+            if (player == null) {
+                event.reply("Player `" + name + "` is offline.").setEphemeral(true).queue();
+                return;
+            }
+            AntiCheatManager.unfreezePlayer(player.getUuid());
+            event.reply("Player unfrozen: `" + name + "`").queue();
+        }
+
+        private void handleSetBalanceCommand(SlashCommandInteractionEvent event) {
+            if (!ConfigManager.getConfig().discord.enableRemoteServerCommands) {
+                event.reply("Remote controls are disabled in config.").setEphemeral(true).queue();
+                return;
+            }
+            if (server == null || event.getOption("player") == null || event.getOption("amount") == null) {
+                event.reply("Missing player/amount").setEphemeral(true).queue();
+                return;
+            }
+            String name = event.getOption("player").getAsString().trim();
+            double amount = event.getOption("amount").getAsDouble();
+            var player = server.getPlayerManager().getPlayer(name);
+            if (player == null) {
+                event.reply("Player `" + name + "` is offline.").setEphemeral(true).queue();
+                return;
+            }
+            EconomyManager.setBalance(player.getUuid(), amount);
+            event.reply("Balance set: `" + name + "` -> " + EconomyManager.formatCurrency(amount)).queue();
+        }
+
+        private void handleWhitelistCommand(SlashCommandInteractionEvent event) {
+            if (!ConfigManager.getConfig().discord.enableRemoteServerCommands) {
+                event.reply("Remote controls are disabled in config.").setEphemeral(true).queue();
+                return;
+            }
+            if (server == null || event.getOption("action") == null) {
+                event.reply("Missing action").setEphemeral(true).queue();
+                return;
+            }
+            String action = event.getOption("action").getAsString().trim().toLowerCase();
+            String player = event.getOption("player") == null ? "" : event.getOption("player").getAsString().trim();
+            String cmd = switch (action) {
+                case "on" -> "whitelist on";
+                case "off" -> "whitelist off";
+                case "add" -> player.isBlank() ? null : "whitelist add " + player;
+                case "remove" -> player.isBlank() ? null : "whitelist remove " + player;
+                default -> null;
+            };
+            if (cmd == null) {
+                event.reply("Usage: action on/off/add/remove (+ player for add/remove)").setEphemeral(true).queue();
+                return;
+            }
+            if (!isAllowedRemoteCommand(cmd)) {
+                event.reply("Command blocked by allowedCommandPrefixes").setEphemeral(true).queue();
+                return;
+            }
+            server.execute(() -> server.getCommandManager().parseAndExecute(server.getCommandSource(), cmd));
+            event.reply("Whitelist action executed: `" + cmd + "`").queue();
+        }
+
+        private void handleServerOverviewCommand(SlashCommandInteractionEvent event) {
+            if (server == null) {
+                event.reply("Server unavailable").setEphemeral(true).queue();
+                return;
+            }
+            String overview = "Players: `" + server.getCurrentPlayerCount() + "/" + server.getMaxPlayerCount() + "`\n"
+                + "Whitelist: `" + (server.getPlayerManager().isWhitelistEnabled() ? "ON" : "OFF") + "`\n"
+                + "Banned users: `" + server.getPlayerManager().getUserBanList().getNames().length + "`\n"
+                + "Ops: `" + server.getPlayerManager().getOpList().getNames().length + "`\n"
+                + "Top command: `" + topCommandFromLogs() + "`";
+            event.reply(overview).setEphemeral(true).queue();
+        }
+
+        private void handleSaveAllCommand(SlashCommandInteractionEvent event) {
+            if (!ConfigManager.getConfig().discord.enableRemoteServerCommands) {
+                event.reply("Remote controls are disabled in config.").setEphemeral(true).queue();
+                return;
+            }
+            String cmd = "save-all";
+            if (!isAllowedRemoteCommand(cmd)) {
+                event.reply("Command blocked by allowedCommandPrefixes").setEphemeral(true).queue();
+                return;
+            }
+            if (server != null) {
+                server.execute(() -> server.getCommandManager().parseAndExecute(server.getCommandSource(), cmd));
+            }
+            event.reply("Executed: `" + cmd + "`").queue();
+        }
+
+        private void handleOpCommand(SlashCommandInteractionEvent event) {
+            if (!ConfigManager.getConfig().discord.enableRemoteServerCommands) {
+                event.reply("Remote controls are disabled in config.").setEphemeral(true).queue();
+                return;
+            }
+            if (event.getOption("player") == null) {
+                event.reply("Missing player").setEphemeral(true).queue();
+                return;
+            }
+            String player = event.getOption("player").getAsString().trim();
+            String cmd = "op " + player;
+            if (!isAllowedRemoteCommand(cmd)) {
+                event.reply("Command blocked by allowedCommandPrefixes").setEphemeral(true).queue();
+                return;
+            }
+            if (server != null) {
+                server.execute(() -> server.getCommandManager().parseAndExecute(server.getCommandSource(), cmd));
+            }
+            event.reply("Executed: `" + cmd + "`").queue();
+        }
+
+        private void handleDeopCommand(SlashCommandInteractionEvent event) {
+            if (!ConfigManager.getConfig().discord.enableRemoteServerCommands) {
+                event.reply("Remote controls are disabled in config.").setEphemeral(true).queue();
+                return;
+            }
+            if (event.getOption("player") == null) {
+                event.reply("Missing player").setEphemeral(true).queue();
+                return;
+            }
+            String player = event.getOption("player").getAsString().trim();
+            String cmd = "deop " + player;
+            if (!isAllowedRemoteCommand(cmd)) {
+                event.reply("Command blocked by allowedCommandPrefixes").setEphemeral(true).queue();
+                return;
+            }
+            if (server != null) {
+                server.execute(() -> server.getCommandManager().parseAndExecute(server.getCommandSource(), cmd));
+            }
+            event.reply("Executed: `" + cmd + "`").queue();
+        }
+
+        private void handlePardonCommand(SlashCommandInteractionEvent event) {
+            if (!ConfigManager.getConfig().discord.enableRemoteServerCommands) {
+                event.reply("Remote controls are disabled in config.").setEphemeral(true).queue();
+                return;
+            }
+            if (event.getOption("player") == null) {
+                event.reply("Missing player").setEphemeral(true).queue();
+                return;
+            }
+            String player = event.getOption("player").getAsString().trim();
+            String cmd = "pardon " + player;
+            if (!isAllowedRemoteCommand(cmd)) {
+                event.reply("Command blocked by allowedCommandPrefixes").setEphemeral(true).queue();
+                return;
+            }
+            if (server != null) {
+                server.execute(() -> server.getCommandManager().parseAndExecute(server.getCommandSource(), cmd));
+            }
+            event.reply("Executed: `" + cmd + "`").queue();
+        }
+
+        private void handleEconomyTopCommand(SlashCommandInteractionEvent event) {
+            if (server == null) {
+                event.reply("Server unavailable").setEphemeral(true).queue();
+                return;
+            }
+            var snap = EconomyManager.snapshotBalances(EconomyManager.Currency.COINS);
+            if (snap.isEmpty()) {
+                event.reply("No economy data yet.").setEphemeral(true).queue();
+                return;
+            }
+            StringBuilder sb = new StringBuilder("Top balances (Coins):\n");
+            snap.entrySet().stream()
+                .sorted((a, b) -> b.getValue().compareTo(a.getValue()))
+                .limit(10)
+                .forEach(e -> sb.append("• `").append(e.getKey().toString(), 0, 8).append("` -> ")
+                    .append(EconomyManager.formatCurrency(e.getValue(), EconomyManager.Currency.COINS)).append('\n'));
+            event.reply(sb.toString().trim()).setEphemeral(true).queue();
+        }
+
+        private void handleEconomyPlayerCommand(SlashCommandInteractionEvent event) {
+            if (server == null || event.getOption("player") == null) {
+                event.reply("Server unavailable or missing player.").setEphemeral(true).queue();
+                return;
+            }
+            String name = event.getOption("player").getAsString().trim();
+            var p = server.getPlayerManager().getPlayer(name);
+            if (p == null) {
+                event.reply("Player `" + name + "` is offline.").setEphemeral(true).queue();
+                return;
+            }
+            UUID uuid = p.getUuid();
+            StringBuilder sb = new StringBuilder("Economy for `").append(p.getName().getString()).append("`:\n");
+            for (EconomyManager.Currency c : EconomyManager.Currency.values()) {
+                sb.append("• ").append(c.displayName).append(": ").append(EconomyManager.formatCurrency(EconomyManager.getBalance(uuid, c), c)).append('\n');
+            }
+            event.reply(sb.toString().trim()).setEphemeral(true).queue();
+        }
+
+        private void handleClaimsOverviewCommand(SlashCommandInteractionEvent event) {
+            var snap = ClaimManager.getAllClaimsSnapshot();
+            int count = snap.size();
+            StringBuilder sb = new StringBuilder("Claims: `").append(count).append("`\nSample:\n");
+            snap.entrySet().stream().limit(8).forEach(e -> {
+                sb.append("• `").append(e.getKey()).append("` ").append(e.getValue().type == null ? "?" : e.getValue().type.name())
+                    .append(e.getValue().isOverdue ? " (overdue)" : "")
+                    .append('\n');
+            });
+            event.reply(sb.toString().trim()).setEphemeral(true).queue();
+        }
+
+        private void handleClansOverviewCommand(SlashCommandInteractionEvent event) {
+            var clans = ClanManager.getAllClans();
+            StringBuilder sb = new StringBuilder("Clans: `").append(clans.size()).append("`\nTop:\n");
+            clans.values().stream()
+                .sorted((a, b) -> Integer.compare(b.members.size(), a.members.size()))
+                .limit(8)
+                .forEach(c -> sb.append("• `").append(c.name).append("` [").append(c.tag).append("] members=").append(c.members.size()).append(" bank=").append((long) c.bankBalance).append('\n'));
+            event.reply(sb.toString().trim()).setEphemeral(true).queue();
+        }
+
+        private void handleNoteCommand(SlashCommandInteractionEvent event) {
+            if (!ConfigManager.getConfig().discord.enableRemoteServerCommands) {
+                event.reply("Remote controls are disabled in config.").setEphemeral(true).queue();
+                return;
+            }
+            if (server == null || event.getOption("player") == null || event.getOption("text") == null) {
+                event.reply("Missing player/text").setEphemeral(true).queue();
+                return;
+            }
+            String name = event.getOption("player").getAsString().trim();
+            String text = event.getOption("text").getAsString().replace('\n', ' ').trim();
+            var p = server.getPlayerManager().getPlayer(name);
+            if (p == null) {
+                event.reply("Player `" + name + "` is offline.").setEphemeral(true).queue();
+                return;
+            }
+            ModerationManager.addNote(p.getUuid(), null, text);
+            event.reply("Note added for `" + name + "`.").setEphemeral(true).queue();
+        }
+
+        private void handleWarnCommand(SlashCommandInteractionEvent event) {
+            if (!ConfigManager.getConfig().discord.enableRemoteServerCommands) {
+                event.reply("Remote controls are disabled in config.").setEphemeral(true).queue();
+                return;
+            }
+            if (server == null || event.getOption("player") == null || event.getOption("reason") == null) {
+                event.reply("Missing player/reason").setEphemeral(true).queue();
+                return;
+            }
+            String name = event.getOption("player").getAsString().trim();
+            String reason = event.getOption("reason").getAsString().replace('\n', ' ').trim();
+            var p = server.getPlayerManager().getPlayer(name);
+            if (p == null) {
+                event.reply("Player `" + name + "` is offline.").setEphemeral(true).queue();
+                return;
+            }
+            ModerationManager.addWarn(p.getUuid(), null, reason);
+            event.reply("Warn added for `" + name + "`.").setEphemeral(true).queue();
+        }
+    }
+
+    private static String summarizeInventory(net.minecraft.inventory.Inventory inv, String title) {
+        StringBuilder sb = new StringBuilder(title).append(":\n");
+        int printed = 0;
+        for (int i = 0; i < inv.size(); i++) {
+            var s = inv.getStack(i);
+            if (s == null || s.isEmpty()) continue;
+            sb.append("`").append(i).append("` ").append(s.getName().getString()).append(" x").append(s.getCount()).append('\n');
+            printed++;
+            if (printed >= 25) break;
+        }
+        if (printed == 0) return title + ": (empty)";
+        return sb.toString().trim();
+    }
+
+    private static String topCommandFromLogs() {
+        Map<String, Integer> counts = new HashMap<>();
+        for (var e : LoggingManager.getRecentLogs(250)) {
+            if (!"command".equalsIgnoreCase(e.channel)) continue;
+            int idx = e.message.indexOf(" executed: ");
+            if (idx < 0) continue;
+            String cmd = e.message.substring(idx + " executed: ".length()).trim();
+            if (cmd.startsWith("/")) cmd = cmd.substring(1);
+            if (cmd.isBlank()) continue;
+            String root = cmd.split("\\s+")[0].toLowerCase();
+            counts.merge(root, 1, Integer::sum);
+        }
+        return counts.entrySet().stream()
+            .max(Map.Entry.comparingByValue())
+            .map(e -> "/" + e.getKey() + " (" + e.getValue() + ")")
+            .orElse("n/a");
+    }
+
+    private static boolean isAllowedRemoteCommand(String command) {
+        var cfg = ConfigManager.getConfig();
+        if (cfg == null || cfg.discord == null) return false;
+        String[] prefixes = cfg.discord.allowedCommandPrefixes;
+        if (prefixes == null || prefixes.length == 0) return true;
+        String first = command.split("\\s+")[0].toLowerCase();
+        return Arrays.stream(prefixes)
+            .filter(x -> x != null && !x.isBlank())
+            .map(x -> x.trim().toLowerCase())
+            .anyMatch(first::equals);
     }
 
     private static String getBountyList() {

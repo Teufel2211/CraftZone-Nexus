@@ -342,6 +342,19 @@ public class EconomyManager {
         }
     }
 
+    public static List<Transaction> getRecentTransactions(UUID playerId, int limit) {
+        if (playerId == null) return List.of();
+        int capped = Math.max(1, Math.min(limit, 100));
+        TransactionHistory history = transactionHistories.get(playerId.toString());
+        if (history == null || history.transactions == null || history.transactions.isEmpty()) return List.of();
+        int size = history.transactions.size();
+        int from = Math.max(0, size - capped);
+        // Return newest-first copy.
+        List<Transaction> slice = new ArrayList<>(history.transactions.subList(from, size));
+        java.util.Collections.reverse(slice);
+        return slice;
+    }
+
     public static String formatCurrency(double amount) {
         return formatCurrency(BigDecimal.valueOf(amount), Currency.COINS, false);
     }

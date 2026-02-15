@@ -313,6 +313,37 @@ public class ClanManager {
         return new HashMap<>(clans);
     }
 
+    // Admin APIs (used by dashboard/discord). These are guarded by auth/allowlists at the call sites.
+    public static boolean adminSetClanBank(String clanName, double newBalance) {
+        if (clanName == null || clanName.isBlank()) return false;
+        Clan clan = clans.get(clanName.toLowerCase());
+        if (clan == null) return false;
+        clan.bankBalance = Math.max(0.0, newBalance);
+        saveClans(null);
+        return true;
+    }
+
+    public static boolean adminSetClanLevel(String clanName, int newLevel) {
+        if (clanName == null || clanName.isBlank()) return false;
+        Clan clan = clans.get(clanName.toLowerCase());
+        if (clan == null) return false;
+        clan.level = Math.max(1, Math.min(newLevel, 999));
+        saveClans(null);
+        return true;
+    }
+
+    public static boolean adminDisbandClan(String clanName) {
+        if (clanName == null || clanName.isBlank()) return false;
+        String key = clanName.toLowerCase();
+        Clan clan = clans.remove(key);
+        if (clan == null) return false;
+        for (UUID member : clan.members.keySet()) {
+            playerClans.remove(member);
+        }
+        saveClans(null);
+        return true;
+    }
+
     public static int getMaxMembers(Clan clan) {
         return 5 + ((int)clan.upgrades.getOrDefault("max_members", 0) * 2);
     }

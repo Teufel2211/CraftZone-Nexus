@@ -91,6 +91,18 @@ public final class ShopAdminCommands {
                 .then(CommandManager.argument("minPermLevel", IntegerArgumentType.integer(0, 4))
                     .executes(ShopAdminCommands::setPermLevel))));
 
+        root.then(CommandManager.literal("addcategory")
+            .then(CommandManager.argument("name", StringArgumentType.greedyString())
+                .executes(ShopAdminCommands::addCategory)));
+
+        root.then(CommandManager.literal("removecategory")
+            .then(CommandManager.argument("name", StringArgumentType.greedyString())
+                .suggests(CATEGORY_SUGGESTIONS)
+                .executes(ShopAdminCommands::removeCategory)));
+
+        root.then(CommandManager.literal("listcategories")
+            .executes(ShopAdminCommands::listCategories));
+
         root.then(CommandManager.literal("info")
             .then(CommandManager.argument("item", IdentifierArgumentType.identifier()).suggests(SHOP_ITEM_SUGGESTIONS).executes(ShopAdminCommands::info)));
 
@@ -231,6 +243,38 @@ public final class ShopAdminCommands {
         var items = ShopManager.getShopItems();
         context.getSource().sendMessage(Text.literal("§6Shop items: §f" + items.size()));
         return 1;
+    }
+
+    private static int addCategory(CommandContext<ServerCommandSource> context) {
+        String name = StringArgumentType.getString(context, "name");
+        boolean added = ShopManager.addCustomCategory(name);
+        if (added) {
+            context.getSource().sendMessage(Text.literal("§aAdded custom category: " + name));
+            return 1;
+        }
+        context.getSource().sendMessage(Text.literal("§eCategory already exists or invalid: " + name));
+        return 0;
+    }
+
+    private static int removeCategory(CommandContext<ServerCommandSource> context) {
+        String name = StringArgumentType.getString(context, "name");
+        boolean removed = ShopManager.removeCustomCategory(name);
+        if (removed) {
+            context.getSource().sendMessage(Text.literal("§aRemoved custom category: " + name));
+            return 1;
+        }
+        context.getSource().sendMessage(Text.literal("§eCategory not found: " + name));
+        return 0;
+    }
+
+    private static int listCategories(CommandContext<ServerCommandSource> context) {
+        var categories = ShopManager.getCategories();
+        if (categories.isEmpty()) {
+            context.getSource().sendMessage(Text.literal("§eNo categories available."));
+            return 1;
+        }
+        context.getSource().sendMessage(Text.literal("§6Categories (" + categories.size() + "): §f" + String.join(", ", categories)));
+        return categories.size();
     }
 
     private static int auditNonSurvival(CommandContext<ServerCommandSource> context) {

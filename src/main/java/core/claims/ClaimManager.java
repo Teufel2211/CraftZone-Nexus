@@ -257,6 +257,44 @@ public class ClaimManager {
         return claims.get(getChunkKey(pos));
     }
 
+    public static Map<String, Claim> getAllClaimsSnapshot() {
+        if (!isEnabled()) return Map.of();
+        return new HashMap<>(claims);
+    }
+
+    public static boolean adminUnclaimByKey(String chunkKey) {
+        if (!isEnabled()) return false;
+        if (chunkKey == null || chunkKey.isBlank()) return false;
+        Claim claim = claims.remove(chunkKey);
+        if (claim == null) return false;
+        playerClaims.getOrDefault(claim.ownerId, new HashSet<>()).remove(chunkKey);
+        if (claim.type == ClaimType.CLAN && claim.clanName != null) {
+            clanClaims.getOrDefault(claim.clanName, new HashSet<>()).remove(chunkKey);
+        }
+        saveClaims(null);
+        return true;
+    }
+
+    public static boolean adminSetClaimPermission(String chunkKey, ClaimPermission permission, boolean allowed) {
+        if (!isEnabled()) return false;
+        if (chunkKey == null || chunkKey.isBlank() || permission == null) return false;
+        Claim claim = claims.get(chunkKey);
+        if (claim == null) return false;
+        claim.permissions.put(permission, allowed);
+        saveClaims(null);
+        return true;
+    }
+
+    public static boolean adminSetOverdue(String chunkKey, boolean overdue) {
+        if (!isEnabled()) return false;
+        if (chunkKey == null || chunkKey.isBlank()) return false;
+        Claim claim = claims.get(chunkKey);
+        if (claim == null) return false;
+        claim.isOverdue = overdue;
+        saveClaims(null);
+        return true;
+    }
+
     public static boolean isClaimed(ChunkPos pos) {
         if (!isEnabled()) return false;
         return claims.containsKey(getChunkKey(pos));

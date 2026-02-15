@@ -45,6 +45,7 @@ public class ShopManager {
         .create();
 
     private static final File SHOP_FILE = new File("shop.json");
+    private static final File SHOP_CATEGORIES_FILE = new File("shop-categories.json");
     private static final ExecutorService EXECUTOR = Executors.newCachedThreadPool();
     private static final Set<String> SHOP_EXCLUDED_ITEMS = Set.of(
         "minecraft:air",
@@ -100,6 +101,7 @@ public class ShopManager {
     );
 
     private static final Map<String, ShopItem> shopItems = new ConcurrentHashMap<>();
+    private static final Set<String> customCategories = ConcurrentHashMap.newKeySet();
     private static final Map<String, String> CREATIVE_CATEGORY_BY_ITEM = new ConcurrentHashMap<>();
     private static final Map<String, Integer> CREATIVE_ORDER_BY_ITEM = new ConcurrentHashMap<>();
     private static final List<String> CATEGORY_ORDER = List.of(
@@ -111,7 +113,6 @@ public class ShopManager {
         "ToolsAndCombat",
         "FoodAndDrinks",
         "Ingredients",
-        "SpawnEggs",
         "Utilities"
     );
 
@@ -144,8 +145,12 @@ public class ShopManager {
     }
 
     public static void init() {
+        Safe.run("ShopManager.loadCustomCategories", ShopManager::loadCustomCategories);
         ServerLifecycleEvents.SERVER_STARTED.register(server -> Safe.run("ShopManager.loadShop", () -> loadShop(server)));
-        ServerLifecycleEvents.SERVER_STOPPING.register(server -> Safe.run("ShopManager.saveShop", () -> saveShop(server)));
+        ServerLifecycleEvents.SERVER_STOPPING.register(server -> Safe.run("ShopManager.saveShop", () -> {
+            saveShop(server);
+            saveCustomCategories();
+        }));
         Safe.run("ShopManager.initializeDefaultShop", ShopManager::initializeDefaultShop);
     }
 
@@ -282,6 +287,7 @@ public class ShopManager {
         if (lower.contains("command_block") || lower.contains("structure_block")) return false;
         if (lower.contains("jigsaw") || lower.contains("debug")) return false;
         if (lower.contains("test_")) return false;
+        if (lower.contains("spawn_egg")) return false;
         if (lower.contains("portal") || lower.contains("gateway")) return false;
         if (lower.contains("barrier") || lower.contains("bedrock")) return false;
         if (lower.contains("spawner") || lower.contains("trial_spawner")) return false;
@@ -596,8 +602,13 @@ public class ShopManager {
         ShopItem item = shopItems.get(itemId);
         normalizeItem(item);
         if (item == null) return false;
-        item.category = normalizeCategory(category);
+        String normalized = normalizeCategory(category);
+        item.category = normalized;
         item.categoryLocked = true;
+        if (!CATEGORY_ORDER.contains(normalized)) {
+            customCategories.add(normalized);
+            saveCustomCategories();
+        }
         normalizeItem(item);
         saveShop(null);
         return true;
@@ -682,10 +693,14 @@ public class ShopManager {
     }
 
     public static List<String> getCategories() {
-        return shopItems.values().stream()
+        Set<String> all = new LinkedHashSet<>();
+        all.addAll(customCategories);
+        shopItems.values().stream()
             .peek(ShopManager::normalizeItem)
             .map(item -> item.category)
             .distinct()
+            .forEach(all::add);
+        return all.stream()
             .sorted((a, b) -> {
                 int ia = CATEGORY_ORDER.indexOf(a);
                 int ib = CATEGORY_ORDER.indexOf(b);
@@ -695,6 +710,55 @@ public class ShopManager {
                 return String.CASE_INSENSITIVE_ORDER.compare(a, b);
             })
             .toList();
+    }
+
+    public static boolean addCustomCategory(String name) {
+        if (name == null || name.isBlank()) return false;
+        String normalized = normalizeCategory(name);
+        if (normalized.isBlank()) return false;
+        boolean added = customCategories.add(normalized);
+        if (added) saveCustomCategories();
+        return added;
+    }
+
+    public static boolean removeCustomCategory(String name) {
+        if (name == null || name.isBlank()) return false;
+        String normalized = normalizeCategory(name);
+        boolean removed = customCategories.remove(normalized);
+        if (removed) saveCustomCategories();
+        return removed;
+    }
+
+    public static List<String> getCustomCategories() {
+        return customCategories.stream()
+            .sorted(String.CASE_INSENSITIVE_ORDER)
+            .toList();
+    }
+
+    private static void loadCustomCategories() {
+        if (!SHOP_CATEGORIES_FILE.exists()) return;
+        try (FileReader reader = new FileReader(SHOP_CATEGORIES_FILE)) {
+            Type type = new TypeToken<List<String>>(){}.getType();
+            List<String> loaded = GSON.fromJson(reader, type);
+            customCategories.clear();
+            if (loaded != null) {
+                for (String value : loaded) {
+                    if (value != null && !value.isBlank()) {
+                        customCategories.add(normalizeCategory(value));
+                    }
+                }
+            }
+        } catch (Exception e) {
+            LOGGER.error("Failed to load shop categories", e);
+        }
+    }
+
+    private static void saveCustomCategories() {
+        try (FileWriter writer = new FileWriter(SHOP_CATEGORIES_FILE)) {
+            GSON.toJson(getCustomCategories(), writer);
+        } catch (Exception e) {
+            LOGGER.error("Failed to save shop categories", e);
+        }
     }
 
     public static List<String> getNonSurvivalItemsInCatalog() {

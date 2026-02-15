@@ -2,14 +2,15 @@
   "schemaVersion": 1,
   "id": "core",
   "version": "${version}",
-  "name": "Core Mod",
-  "description": "A comprehensive Fabric mod with Anti-Cheat, Economy, Shops, Claims, Voice Integration, Bounty/Wanted System, and Logging.",
+  "name": "CraftZone Nexus",
+  "description": "All-in-one Fabric server suite: Anti-Cheat, Economy/Shop, Claims/Clans, Bounty/Wanted, Discord bot/logging, and an optional web dashboard.",
   "authors": [
-    "GitHub Copilot"
+    "Teufel2211"
   ],
   "contact": {
-    "homepage": "https://github.com/",
-    "sources": "https://github.com/"
+    "homepage": "https://github.com/Teufel2211/Mod",
+    "sources": "https://github.com/Teufel2211/Mod",
+    "issues": "https://github.com/Teufel2211/Mod/issues"
   },
   "license": "MIT",
   "icon": "assets/core/icon.png",

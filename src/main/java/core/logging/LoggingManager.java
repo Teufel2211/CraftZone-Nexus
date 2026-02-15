@@ -4,7 +4,7 @@ import net.fabricmc.fabric.api.message.v1.ServerMessageEvents;
 import net.fabricmc.fabric.api.networking.v1.ServerPlayConnectionEvents;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerLifecycleEvents;
 import net.fabricmc.fabric.api.event.player.UseBlockCallback;
-// import net.fabricmc.fabric.api.event.player.UseItemCallback;
+import net.fabricmc.fabric.api.event.player.UseItemCallback;
 // import net.fabricmc.fabric.api.event.lifecycle.v1.ServerEntityCombatEvents;
 // import net.fabricmc.fabric.api.event.player.ServerPlayerEvents;
 // import net.fabricmc.fabric.api.event.advancement.ServerAdvancementEvents;
@@ -13,6 +13,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import net.minecraft.network.message.SignedMessage;
 import net.minecraft.server.network.ServerPlayerEntity;
+import core.config.ConfigManager;
 // import net.minecraft.util.ActionResult;
 // import net.minecraft.util.TypedActionResult;
 // import net.minecraft.util.hit.BlockHitResult;
@@ -32,6 +33,8 @@ import java.util.HashMap;
 import java.util.Deque;
 import java.util.List;
 import java.util.Map;
+import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
@@ -46,14 +49,19 @@ public class LoggingManager {
     });
     private static final Deque<RecentLogEntry> RECENT_LOGS = new ArrayDeque<>();
     private static final int RECENT_LOG_LIMIT = 500;
+    private static final long COMMAND_DEDUPE_WINDOW_MS = 1000L;
     private static volatile boolean initialized = false;
+    private static final Map<UUID, LastCommand> LAST_COMMANDS = new ConcurrentHashMap<>();
 
     public static void init() {
         if (initialized) return;
         initialized = true;
         ServerMessageEvents.CHAT_MESSAGE.register((message, player, params) ->
             Safe.run("LoggingManager.onChatMessage", () -> onChatMessage(message, player, params)));
-        // ServerMessageEvents.COMMAND.register(LoggingManager::onCommandMessage); // Not available in this Fabric API version
+        ServerMessageEvents.GAME_MESSAGE.register((server, message, overlay) ->
+            Safe.run("LoggingManager.onGameMessage", () -> onGameMessage(message, overlay)));
+        ServerMessageEvents.COMMAND_MESSAGE.register((message, source, params) ->
+            Safe.run("LoggingManager.onCommandMessage", () -> onCommandMessage(message, source)));
 
         ServerPlayConnectionEvents.JOIN.register((handler, sender, server) ->
             Safe.run("LoggingManager.onJoin", () -> logEvent("JOIN", handler.player, null)));
@@ -68,6 +76,12 @@ public class LoggingManager {
             if (!(player instanceof ServerPlayerEntity serverPlayer) || world.isClient()) return net.minecraft.util.ActionResult.PASS;
             Safe.run("LoggingManager.onBlockUse", () ->
                 logEvent("BLOCK_USE", serverPlayer, world.getBlockState(hitResult.getBlockPos()).getBlock().getName().getString() + " @ " + hitResult.getBlockPos().toShortString()));
+            return net.minecraft.util.ActionResult.PASS;
+        });
+        UseItemCallback.EVENT.register((player, world, hand) -> {
+            if (!(player instanceof ServerPlayerEntity serverPlayer) || world.isClient()) return net.minecraft.util.ActionResult.PASS;
+            Safe.run("LoggingManager.onItemUse", () ->
+                logEvent("ITEM_USE", serverPlayer, player.getStackInHand(hand).getItem().getName().getString()));
             return net.minecraft.util.ActionResult.PASS;
         });
         ServerLifecycleEvents.SERVER_STOPPING.register(server ->
@@ -98,6 +112,21 @@ public class LoggingManager {
         }
     }
 
+    private static void onGameMessage(net.minecraft.text.Text message, boolean overlay) {
+        if (message == null) return;
+        String msg = message.getString();
+        if (msg == null || msg.isBlank()) return;
+        String line = "[" + LocalDateTime.now().format(FORMATTER) + "] " + (overlay ? "OVERLAY: " : "GAME: ") + msg.replace('\n', ' ').trim();
+        appendLog("logs/game-messages.log", "game", line);
+    }
+
+    private static void onCommandMessage(SignedMessage message, net.minecraft.server.command.ServerCommandSource source) {
+        if (source == null || source.getPlayer() == null || message == null) return;
+        String msg = message.getContent().getString();
+        if (msg == null || msg.isBlank()) return;
+        logCommand(msg.startsWith("/") ? msg : ("/" + msg), source.getPlayer());
+    }
+
     private static void logPrivateMessage(String message, ServerPlayerEntity sender) {
         String log = formatPlayerLog(sender, message);
         appendLog("logs/private-messages.log", "private", log);
@@ -115,6 +144,23 @@ public class LoggingManager {
         appendLog("logs/commands.log", "command", log);
         Safe.run("DiscordManager.sendCommandLog", () -> DiscordManager.sendCommandLog(log));
     }
+
+    public static void logCommandExecution(ServerPlayerEntity player, String rawCommand) {
+        if (player == null || rawCommand == null || rawCommand.isBlank()) return;
+        var cfg = ConfigManager.getConfig();
+        if (cfg == null || cfg.logging == null || !cfg.logging.logCommands) return;
+        String command = rawCommand.startsWith("/") ? rawCommand : "/" + rawCommand;
+        if (isDuplicateCommand(player.getUuid(), command)) return;
+        logCommand(command, player);
+    }
+
+    private static boolean isDuplicateCommand(UUID playerId, String command) {
+        long now = System.currentTimeMillis();
+        LastCommand prev = LAST_COMMANDS.put(playerId, new LastCommand(command, now));
+        return prev != null && prev.command.equals(command) && (now - prev.timestampMs) < COMMAND_DEDUPE_WINDOW_MS;
+    }
+
+    private record LastCommand(String command, long timestampMs) {}
 
     private static void logEvent(String type, ServerPlayerEntity player, String details) {
         String msg = "[" + LocalDateTime.now().format(FORMATTER) + "] " + type + ": " + player.getName().getString();
