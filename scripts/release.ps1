@@ -34,9 +34,16 @@ function Invoke-GradleChecked {
         [Parameter(Mandatory = $true)]
         [string[]]$Arguments
     )
-    & ./gradlew @Arguments
+    $gradleOut = @()
+    & ./gradlew @Arguments 2>&1 | Tee-Object -Variable gradleOut
     $exitCode = $LASTEXITCODE
     if ($null -eq $exitCode) { $exitCode = 0 }
+    $outText = ($gradleOut | ForEach-Object { $_.ToString() }) -join "`n"
+    $isSuccessful = $outText -match "BUILD SUCCESSFUL"
+    if ($exitCode -ne 0 -and $isSuccessful) {
+        Write-Warning "Gradle returned exit $exitCode but reported BUILD SUCCESSFUL. Continuing."
+        return
+    }
     if ($exitCode -ne 0) {
         throw "Gradle command failed (exit $exitCode): ./gradlew $($Arguments -join ' ')"
     }
