@@ -15,6 +15,7 @@ import core.util.Safe;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerLifecycleEvents;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.network.ServerPlayerEntity;
+import net.minecraft.registry.Registries;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -817,7 +818,7 @@ public final class DashboardManager {
         String sid = newSessionId();
         long ttlMs = Math.max(5, cfg.logging.dashboardSessionMinutes) * 60_000L;
         SESSIONS.put(sid, new Session(System.currentTimeMillis() + ttlMs));
-        setSessionCookie(ex, sid, cfg.logging.dashboardCookieSecure);
+        setSessionCookie(ex, sid, shouldUseSecureCookie(ex, cfg.logging.dashboardCookieSecure));
         redirect(ex, "/");
     }
 
@@ -826,7 +827,7 @@ public final class DashboardManager {
         String sid = getCookie(ex, "core_session");
         if (sid != null) SESSIONS.remove(sid);
         if (cfg != null && cfg.logging != null) {
-            clearSessionCookie(ex, cfg.logging.dashboardCookieSecure);
+            clearSessionCookie(ex, shouldUseSecureCookie(ex, cfg.logging.dashboardCookieSecure));
         }
         redirect(ex, "/login");
     }
@@ -1740,19 +1741,55 @@ public final class DashboardManager {
         return server.getPlayerManager().getPlayer(name.trim());
     }
 
-    private static List<Map<String, Object>> summarizeInventory(net.minecraft.inventory.Inventory inv) {
-        List<Map<String, Object>> out = new java.util.ArrayList<>();
+    private static Map<String, Object> summarizeInventory(net.minecraft.inventory.Inventory inv) {
+        List<Map<String, Object>> stacks = new java.util.ArrayList<>();
+        Map<String, Integer> totalsByItem = new LinkedHashMap<>();
+        int totalItems = 0;
         for (int i = 0; i < inv.size(); i++) {
             net.minecraft.item.ItemStack stack = inv.getStack(i);
             if (stack == null || stack.isEmpty()) continue;
             Map<String, Object> row = new LinkedHashMap<>();
             row.put("slot", i);
-            row.put("itemId", stack.getItem().toString());
+            row.put("slotLabel", slotLabel(i, inv.size()));
+            row.put("itemId", Registries.ITEM.getId(stack.getItem()).toString());
             row.put("count", stack.getCount());
             row.put("name", stack.getName().getString());
-            out.add(row);
+            row.put("maxStack", stack.getMaxCount());
+            stacks.add(row);
+            String key = stack.getName().getString();
+            totalsByItem.merge(key, stack.getCount(), Integer::sum);
+            totalItems += stack.getCount();
         }
-        return out;
+        List<Map<String, Object>> totals = totalsByItem.entrySet().stream()
+            .sorted((a, b) -> Integer.compare(b.getValue(), a.getValue()))
+            .limit(20)
+            .map(e -> {
+                Map<String, Object> row = new LinkedHashMap<>();
+                row.put("name", e.getKey());
+                row.put("count", e.getValue());
+                return row;
+            }).toList();
+
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("slotsUsed", stacks.size());
+        result.put("totalItems", totalItems);
+        result.put("uniqueItems", totalsByItem.size());
+        result.put("stacks", stacks);
+        result.put("topItems", totals);
+        return result;
+    }
+
+    private static String slotLabel(int slot, int size) {
+        if (size >= 36) {
+            if (slot >= 0 && slot <= 8) return "Hotbar " + slot;
+            if (slot >= 9 && slot <= 35) return "Main " + (slot - 9);
+            if (slot == 36) return "Armor Boots";
+            if (slot == 37) return "Armor Leggings";
+            if (slot == 38) return "Armor Chestplate";
+            if (slot == 39) return "Armor Helmet";
+            if (slot == 40) return "Offhand";
+        }
+        return "Slot " + slot;
     }
 
     private static String extractCommandName(String message) {
@@ -2013,6 +2050,14 @@ public final class DashboardManager {
         sb.append("core_session=; Path=/; Max-Age=0; HttpOnly; SameSite=Strict");
         if (secure) sb.append("; Secure");
         ex.getResponseHeaders().add("Set-Cookie", sb.toString());
+    }
+
+    private static boolean shouldUseSecureCookie(HttpExchange ex, boolean configuredSecure) {
+        if (!configuredSecure) return false;
+        String proto = ex.getRequestHeaders().getFirst("X-Forwarded-Proto");
+        if (proto != null && proto.equalsIgnoreCase("https")) return true;
+        String forwarded = ex.getRequestHeaders().getFirst("Forwarded");
+        return forwarded != null && forwarded.toLowerCase().contains("proto=https");
     }
 
     private static String getCookie(HttpExchange ex, String name) {

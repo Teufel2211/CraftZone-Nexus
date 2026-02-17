@@ -13,6 +13,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import net.minecraft.network.message.SignedMessage;
 import net.minecraft.server.network.ServerPlayerEntity;
+import net.minecraft.registry.Registries;
 import core.config.ConfigManager;
 // import net.minecraft.util.ActionResult;
 // import net.minecraft.util.TypedActionResult;
@@ -77,14 +78,34 @@ public class LoggingManager {
         });
         UseBlockCallback.EVENT.register((player, world, hand, hitResult) -> {
             if (!(player instanceof ServerPlayerEntity serverPlayer) || world.isClient()) return net.minecraft.util.ActionResult.PASS;
-            Safe.run("LoggingManager.onBlockUse", () ->
-                logEvent("BLOCK_USE", serverPlayer, world.getBlockState(hitResult.getBlockPos()).getBlock().getName().getString() + " @ " + hitResult.getBlockPos().toShortString()));
+            Safe.run("LoggingManager.onBlockUse", () -> {
+                var blockState = world.getBlockState(hitResult.getBlockPos());
+                var held = player.getStackInHand(hand);
+                String blockName = blockState.getBlock().getName().getString();
+                String blockId = Registries.BLOCK.getId(blockState.getBlock()).toString();
+                String itemName = held.isEmpty() ? "empty hand" : held.getName().getString();
+                String itemId = held.isEmpty() ? "minecraft:air" : Registries.ITEM.getId(held.getItem()).toString();
+                String details = "right-clicked " + blockName + " (" + blockId + ")"
+                    + " at " + hitResult.getBlockPos().toShortString()
+                    + " in " + world.getRegistryKey().getValue()
+                    + " with " + itemName + " (" + itemId + ")"
+                    + " [" + hand.name().toLowerCase() + "]";
+                logEvent("BLOCK_USE", serverPlayer, details);
+            });
             return net.minecraft.util.ActionResult.PASS;
         });
         UseItemCallback.EVENT.register((player, world, hand) -> {
             if (!(player instanceof ServerPlayerEntity serverPlayer) || world.isClient()) return net.minecraft.util.ActionResult.PASS;
-            Safe.run("LoggingManager.onItemUse", () ->
-                logEvent("ITEM_USE", serverPlayer, player.getStackInHand(hand).getItem().getName().getString()));
+            Safe.run("LoggingManager.onItemUse", () -> {
+                var held = player.getStackInHand(hand);
+                String itemName = held.isEmpty() ? "empty hand" : held.getName().getString();
+                String itemId = held.isEmpty() ? "minecraft:air" : Registries.ITEM.getId(held.getItem()).toString();
+                String details = "used " + itemName + " (" + itemId + ")"
+                    + " in " + world.getRegistryKey().getValue()
+                    + " at " + serverPlayer.getBlockPos().toShortString()
+                    + " [" + hand.name().toLowerCase() + "]";
+                logEvent("ITEM_USE", serverPlayer, details);
+            });
             return net.minecraft.util.ActionResult.PASS;
         });
         ServerLifecycleEvents.SERVER_STOPPING.register(server ->

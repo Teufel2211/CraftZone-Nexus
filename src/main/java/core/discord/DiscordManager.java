@@ -16,6 +16,7 @@ import okhttp3.*;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerLifecycleEvents;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.text.Text;
+import net.minecraft.registry.Registries;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import core.config.ConfigManager;
@@ -1267,17 +1268,49 @@ public class DiscordManager {
     }
 
     private static String summarizeInventory(net.minecraft.inventory.Inventory inv, String title) {
-        StringBuilder sb = new StringBuilder(title).append(":\n");
+        StringBuilder sb = new StringBuilder("**").append(title).append("**\n");
         int printed = 0;
+        int totalItems = 0;
+        int usedSlots = 0;
+        Map<String, Integer> totals = new HashMap<>();
         for (int i = 0; i < inv.size(); i++) {
             var s = inv.getStack(i);
             if (s == null || s.isEmpty()) continue;
-            sb.append("`").append(i).append("` ").append(s.getName().getString()).append(" x").append(s.getCount()).append('\n');
+            usedSlots++;
+            totalItems += s.getCount();
+            totals.merge(s.getName().getString(), s.getCount(), Integer::sum);
+            String itemId = Registries.ITEM.getId(s.getItem()).toString();
+            sb.append("`").append(slotLabel(i, inv.size())).append("` ")
+                .append(s.getName().getString()).append(" x").append(s.getCount())
+                .append(" (`").append(itemId).append("`)")
+                .append('\n');
             printed++;
-            if (printed >= 25) break;
+            if (printed >= 30) break;
         }
-        if (printed == 0) return title + ": (empty)";
+        if (printed == 0) return "**" + title + "**: (empty)";
+        sb.append("\nSlots used: `").append(usedSlots).append('/').append(inv.size())
+            .append("` | Total items: `").append(totalItems).append("`\n");
+        String top = totals.entrySet().stream()
+            .sorted((a, b) -> Integer.compare(b.getValue(), a.getValue()))
+            .limit(5)
+            .map(e -> e.getKey() + " x" + e.getValue())
+            .reduce((a, b) -> a + " | " + b)
+            .orElse("-");
+        sb.append("Top: ").append(top);
         return sb.toString().trim();
+    }
+
+    private static String slotLabel(int slot, int size) {
+        if (size >= 36) {
+            if (slot >= 0 && slot <= 8) return "Hotbar " + slot;
+            if (slot >= 9 && slot <= 35) return "Main " + (slot - 9);
+            if (slot == 36) return "Boots";
+            if (slot == 37) return "Leggings";
+            if (slot == 38) return "Chest";
+            if (slot == 39) return "Helmet";
+            if (slot == 40) return "Offhand";
+        }
+        return "Slot " + slot;
     }
 
     private static String topCommandFromLogs() {
