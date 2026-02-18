@@ -467,7 +467,7 @@ public final class ShopScreenHandler extends ScreenHandler {
 
     @Override
     public ItemStack quickMove(PlayerEntity player, int slotIndex) {
-        if (!(player instanceof ServerPlayerEntity serverPlayer)) return ItemStack.EMPTY;
+        if (!(player instanceof ServerPlayerEntity)) return ItemStack.EMPTY;
 
         if (mode != Mode.SELL) {
             // No shift transfers in buy modes.

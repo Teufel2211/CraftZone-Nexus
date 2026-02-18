@@ -1,0 +1,28 @@
+architectury {
+    platformSetupLoomIde()
+    forge()
+}
+
+loom {
+    forge {
+        convertAccessWideners = true
+    }
+}
+
+dependencies {
+    forge "net.minecraftforge:forge:${forge_version}"
+    modImplementation "dev.architectury:architectury-forge:${architectury_api_version}"
+    common(project(path: ":common", configuration: "namedElements")) { transitive false }
+    forgeLike(project(path: ":common", configuration: "transformProductionForge"))
+}
+
+processResources {
+    filesMatching("META-INF/mods.toml") {
+        expand(
+            version: project.version,
+            mod_id: mod_id,
+            mod_name: mod_name
+        )
+    }
+}
+

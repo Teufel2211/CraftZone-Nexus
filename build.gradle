@@ -175,7 +175,7 @@ tasks.register('generateReleaseNotes') {
     doLast {
         def logText = new ByteArrayOutputStream()
         exec {
-            commandLine 'git', 'log', '--pretty=format:- %h %s', '-n', '30'
+            commandLine 'git', 'log', '--pretty=format:- %h %s', '-n', '1'
             standardOutput = logText
             errorOutput = new ByteArrayOutputStream()
             ignoreExitValue = true

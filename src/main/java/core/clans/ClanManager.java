@@ -108,6 +108,7 @@ public class ClanManager {
     private static final Map<UUID, ClanInvite> pendingInvites = new ConcurrentHashMap<>();
     private static volatile MinecraftServer serverRef;
 
+    @SuppressWarnings("unused")
     private static class ClanInvite {
         public final String clanName;
         public final UUID inviter;

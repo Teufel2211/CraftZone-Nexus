@@ -1,0 +1,22 @@
+architectury {
+    platformSetupLoomIde()
+    neoForge()
+}
+
+dependencies {
+    neoForge "net.neoforged:neoforge:${neoforge_version}"
+    modImplementation "dev.architectury:architectury-neoforge:${architectury_api_version}"
+    common(project(path: ":common", configuration: "namedElements")) { transitive false }
+    neoForgeLike(project(path: ":common", configuration: "transformProductionNeoForge"))
+}
+
+processResources {
+    filesMatching("META-INF/neoforge.mods.toml") {
+        expand(
+            version: project.version,
+            mod_id: mod_id,
+            mod_name: mod_name
+        )
+    }
+}
+

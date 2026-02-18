@@ -59,6 +59,7 @@ public final class AnnouncementManager {
         return config;
     }
 
+    @SuppressWarnings("null")
     private static void loadConfigFile() {
         if (!ANNOUNCEMENT_FILE.exists()) {
             config = AnnouncementConfig.defaultConfig();

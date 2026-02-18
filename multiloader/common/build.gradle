@@ -1,0 +1,9 @@
+architectury {
+    common("fabric", "forge", "neoforge")
+}
+
+dependencies {
+    mappings "net.fabricmc:yarn:${yarn_mappings}:v2"
+    modImplementation "dev.architectury:architectury:${architectury_api_version}"
+    implementation "com.google.code.gson:gson:2.10.1"
+}

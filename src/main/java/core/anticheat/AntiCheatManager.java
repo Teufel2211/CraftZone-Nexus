@@ -17,7 +17,6 @@ import net.minecraft.entity.Entity;
 import net.minecraft.util.math.BlockPos;
 import net.minecraft.util.math.Box;
 import net.minecraft.util.math.Vec3d;
-import core.bounty.BountyManager;
 import core.config.ConfigManager;
 import core.discord.DiscordManager;
 import core.wanted.WantedManager;
@@ -69,7 +68,7 @@ public class AntiCheatManager {
         }
 
         public void addViolation(CheckType type, double severity, String details) {
-            checkViolations.merge(type, severity, Double::sum);
+            checkViolations.put(type, checkViolations.getOrDefault(type, 0.0) + severity);
             violationLevel += severity;
             recentViolations.add(type + ": " + details);
 
@@ -159,6 +158,7 @@ public class AntiCheatManager {
         return false;
     }
 
+    @SuppressWarnings("null")
     public static void init() {
         ServerLifecycleEvents.SERVER_STARTED.register(server -> Safe.run("AntiCheatManager.onServerStart", () -> onServerStart(server)));
         ServerTickEvents.END_SERVER_TICK.register(server -> Safe.run("AntiCheatManager.onServerTick", () -> onServerTick(server)));
@@ -453,13 +453,10 @@ public class AntiCheatManager {
     public static boolean checkRateLimit(String identifier, int maxCalls, long timeWindowMs) {
         long currentTime = System.currentTimeMillis();
         String key = identifier + ":" + (currentTime / timeWindowMs);
-
-        // This is a simple implementation - in production you'd want a more sophisticated rate limiter
-        return ipRateLimits.compute(key, (k, v) -> {
-            if (v == null) return 1L;
-            if (v >= maxCalls) return v; // Still over limit
-            return v + 1;
-        }) <= maxCalls;
+        long calls = ipRateLimits.getOrDefault(key, 0L);
+        if (calls >= maxCalls) return false;
+        ipRateLimits.put(key, calls + 1L);
+        return true;
     }
 
     private static void kickPlayer(UUID playerId, String reason) {

@@ -125,6 +125,7 @@ public class EconomyManager {
         }
     }
 
+    @SuppressWarnings("null")
     public static void loadData(MinecraftServer server) {
         EXECUTOR.submit(() -> {
             try {

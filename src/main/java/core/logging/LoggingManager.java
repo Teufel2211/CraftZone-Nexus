@@ -57,6 +57,7 @@ public class LoggingManager {
     private static final Map<UUID, LastCommand> LAST_COMMANDS = new ConcurrentHashMap<>();
     private static final Map<String, LastRecent> LAST_RECENT_BY_CHANNEL = new ConcurrentHashMap<>();
 
+    @SuppressWarnings("null")
     public static void init() {
         if (initialized) return;
         initialized = true;
@@ -277,7 +278,7 @@ public class LoggingManager {
     public static Map<String, Integer> getRecentChannelCounts(int limit) {
         Map<String, Integer> counts = new HashMap<>();
         for (RecentLogEntry entry : getRecentLogs(limit)) {
-            counts.merge(entry.channel, 1, Integer::sum);
+            counts.put(entry.channel, counts.getOrDefault(entry.channel, 0) + 1);
         }
         return counts;
     }

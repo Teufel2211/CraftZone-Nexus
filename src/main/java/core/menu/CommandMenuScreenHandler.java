@@ -14,11 +14,9 @@ import net.minecraft.server.network.ServerPlayerEntity;
 public class CommandMenuScreenHandler extends ScreenHandler {
     protected final SimpleInventory menuInventory;
     private final String[] commands;
-    private final int rows;
 
     protected CommandMenuScreenHandler(ScreenHandlerType<?> type, int syncId, PlayerInventory playerInventory, int rows) {
         super(type, syncId);
-        this.rows = rows;
         this.menuInventory = new SimpleInventory(rows * 9);
         this.commands = new String[menuInventory.size()];
 

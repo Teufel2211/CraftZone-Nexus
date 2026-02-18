@@ -964,7 +964,7 @@ public final class DashboardManager {
         for (var e : LoggingManager.getRecentLogs(Math.max(1, Math.min(limit, 500)))) {
             String actor = parseActor(e.message);
             if (actor == null || actor.isBlank()) continue;
-            counts.merge(actor, 1, Integer::sum);
+            counts.put(actor, counts.getOrDefault(actor, 0) + 1);
         }
 
         var top = counts.entrySet().stream()
@@ -1056,7 +1056,7 @@ public final class DashboardManager {
             if (!"command".equalsIgnoreCase(e.channel)) continue;
             String cmd = extractCommandName(e.message);
             if (cmd == null || cmd.isBlank()) continue;
-            counts.merge(cmd, 1, Integer::sum);
+            counts.put(cmd, counts.getOrDefault(cmd, 0) + 1);
         }
         List<Map<String, Object>> rows = counts.entrySet().stream()
             .sorted((a, b) -> Integer.compare(b.getValue(), a.getValue()))
@@ -1083,7 +1083,7 @@ public final class DashboardManager {
         if (server != null) {
             for (var p : server.getPlayerManager().getPlayerList()) {
                 String world = p.getEntityWorld().getRegistryKey().getValue().toString();
-                counts.merge(world, 1, Integer::sum);
+                counts.put(world, counts.getOrDefault(world, 0) + 1);
             }
         }
         List<Map<String, Object>> rows = counts.entrySet().stream()
@@ -1212,8 +1212,7 @@ public final class DashboardManager {
             return;
         }
         String body = new String(ex.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
-        Map<?, ?> req;
-        try { req = GSON.fromJson(body, Map.class); } catch (Exception ignored) { req = null; }
+        Map<?, ?> req = parseJsonMap(body);
         String chunkKey = req == null ? null : String.valueOf(req.get("chunk"));
         if (chunkKey == null || chunkKey.isBlank()) {
             send(ex, 400, "application/json", "{\"error\":\"missing_chunk\"}");
@@ -1235,8 +1234,7 @@ public final class DashboardManager {
             return;
         }
         String body = new String(ex.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
-        Map<?, ?> req;
-        try { req = GSON.fromJson(body, Map.class); } catch (Exception ignored) { req = null; }
+        Map<?, ?> req = parseJsonMap(body);
         String chunkKey = req == null ? null : String.valueOf(req.get("chunk"));
         String permRaw = req == null ? null : String.valueOf(req.get("permission"));
         boolean allowed = req != null && Boolean.parseBoolean(String.valueOf(req.get("allowed")));
@@ -1293,8 +1291,7 @@ public final class DashboardManager {
             return;
         }
         String body = new String(ex.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
-        Map<?, ?> req;
-        try { req = GSON.fromJson(body, Map.class); } catch (Exception ignored) { req = null; }
+        Map<?, ?> req = parseJsonMap(body);
         String action = req == null ? null : String.valueOf(req.get("action"));
         String clan = req == null ? null : String.valueOf(req.get("clan"));
         String value = req == null ? "" : String.valueOf(req.get("value"));
@@ -1358,8 +1355,7 @@ public final class DashboardManager {
             return;
         }
         String body = new String(ex.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
-        Map<?, ?> req;
-        try { req = GSON.fromJson(body, Map.class); } catch (Exception ignored) { req = null; }
+        Map<?, ?> req = parseJsonMap(body);
         String note = req == null ? null : String.valueOf(req.get("note"));
         String name = req == null ? null : String.valueOf(req.get("name"));
         String uuidRaw = req == null ? null : String.valueOf(req.get("uuid"));
@@ -1391,8 +1387,7 @@ public final class DashboardManager {
             return;
         }
         String body = new String(ex.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
-        Map<?, ?> req;
-        try { req = GSON.fromJson(body, Map.class); } catch (Exception ignored) { req = null; }
+        Map<?, ?> req = parseJsonMap(body);
         String reason = req == null ? null : String.valueOf(req.get("reason"));
         String name = req == null ? null : String.valueOf(req.get("name"));
         ServerPlayerEntity p = findPlayerByName(name);
@@ -1425,12 +1420,7 @@ public final class DashboardManager {
         }
 
         String body = new String(ex.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
-        Map<?, ?> req;
-        try {
-            req = GSON.fromJson(body, Map.class);
-        } catch (Exception ignored) {
-            req = null;
-        }
+        Map<?, ?> req = parseJsonMap(body);
         String command = req == null ? null : String.valueOf(req.get("command"));
         command = command == null ? "" : command.trim();
         if (command.startsWith("/")) command = command.substring(1);
@@ -1569,12 +1559,7 @@ public final class DashboardManager {
             return;
         }
         String body = new String(ex.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
-        Map<?, ?> req;
-        try {
-            req = GSON.fromJson(body, Map.class);
-        } catch (Exception ignored) {
-            req = null;
-        }
+        Map<?, ?> req = parseJsonMap(body);
         String name = req == null ? null : String.valueOf(req.get("name"));
         String action = req == null ? null : String.valueOf(req.get("action"));
         String value = req == null ? "" : String.valueOf(req.get("value"));
@@ -1757,7 +1742,7 @@ public final class DashboardManager {
             row.put("maxStack", stack.getMaxCount());
             stacks.add(row);
             String key = stack.getName().getString();
-            totalsByItem.merge(key, stack.getCount(), Integer::sum);
+            totalsByItem.put(key, totalsByItem.getOrDefault(key, 0) + stack.getCount());
             totalItems += stack.getCount();
         }
         List<Map<String, Object>> totals = totalsByItem.entrySet().stream()
@@ -1997,6 +1982,16 @@ public final class DashboardManager {
             }
         }
         return "";
+    }
+
+    @SuppressWarnings({"unchecked", "null"})
+    private static Map<?, ?> parseJsonMap(String body) {
+        if (body == null || body.isBlank()) return null;
+        try {
+            return GSON.fromJson(body, Map.class);
+        } catch (Exception ignored) {
+            return null;
+        }
     }
 
     private static boolean verifyDashboardPassword(String password) {

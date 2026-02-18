@@ -11,7 +11,6 @@ import net.minecraft.block.BlockState;
 import net.minecraft.block.Blocks;
 import net.minecraft.block.entity.BlockEntity;
 import net.minecraft.block.entity.ChestBlockEntity;
-import net.minecraft.component.DataComponentTypes;
 import net.minecraft.item.Item;
 import net.minecraft.item.ItemStack;
 import net.minecraft.item.Items;
@@ -58,6 +57,7 @@ public final class ChestAuditManager {
 
     private ChestAuditManager() {}
 
+    @SuppressWarnings("null")
     public static void init() {
         ServerLifecycleEvents.SERVER_STARTED.register(server -> Safe.run("ChestAuditManager.load", ChestAuditManager::load));
         ServerLifecycleEvents.SERVER_STOPPING.register(server -> Safe.run("ChestAuditManager.save", ChestAuditManager::save));
@@ -93,7 +93,6 @@ public final class ChestAuditManager {
         session.pos = pos.toImmutable();
         session.playerName = player.getName().getString();
         session.before = snapshotCounts(chest);
-        session.startedAt = System.currentTimeMillis();
         openSessions.put(player.getUuid(), session);
     }
 
@@ -135,7 +134,8 @@ public final class ChestAuditManager {
             Item item = stack.getItem();
             Identifier id = Registries.ITEM.getId(item);
             if (id == null) continue;
-            counts.merge(id.toString(), stack.getCount(), Integer::sum);
+            String key = id.toString();
+            counts.put(key, counts.getOrDefault(key, 0) + stack.getCount());
         }
         return counts;
     }
@@ -233,7 +233,6 @@ public final class ChestAuditManager {
         BlockPos pos;
         String playerName;
         Map<String, Integer> before;
-        long startedAt;
     }
 
     private static final class ChestAuditEntry {
@@ -243,4 +242,3 @@ public final class ChestAuditManager {
         int delta;
     }
 }
-

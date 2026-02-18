@@ -21,6 +21,7 @@ public final class HandshakeServer {
     private static final Map<UUID, Boolean> ok = new HashMap<>();
     private static boolean initialized;
 
+    @SuppressWarnings("null")
     public static void init() {
         if (initialized) return;
         initialized = true;

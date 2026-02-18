@@ -78,19 +78,22 @@ function Invoke-GradleChecked {
     }
 }
 
-Write-Host "1) Bump version..."
+Write-Host "1) Preflight build (must pass before version bump/upload)..."
+Invoke-GradleChecked @("clean", "build", "-x", "modrinth", "-x", "curseforge", "-PreleaseType=$ReleaseType")
+
+Write-Host "2) Bump version..."
 Invoke-GradleChecked @("bumpModVersion")
 $currentVersion = Get-ModVersion
 Write-Host "Current version: $currentVersion"
 
-Write-Host "2) Build artifact with new version..."
+Write-Host "3) Build artifact with bumped version..."
 # Use remapJar to avoid plugin side effects that can hook upload tasks into build.
 Invoke-GradleChecked @("clean", "remapJar", "sourcesJar", "-PreleaseType=$ReleaseType")
 
-Write-Host "3) Generate release notes..."
+Write-Host "4) Generate release notes..."
 Invoke-GradleChecked @("generateReleaseNotes", "-PreleaseType=$ReleaseType")
 
-Write-Host "4) Upload to Modrinth/CurseForge (if configured)..."
+Write-Host "5) Upload to Modrinth/CurseForge (if configured)..."
 $hasModrinth = ($env:MODRINTH_TOKEN -and $env:MODRINTH_PROJECT_ID)
 $hasCurseforge = ($env:CURSEFORGE_TOKEN -and $env:CURSEFORGE_PROJECT_ID)
 

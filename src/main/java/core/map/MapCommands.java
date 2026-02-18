@@ -154,8 +154,13 @@ public class MapCommands {
                                                 return 0;
                                             }
 
-                                            MapManager.addWaypoint(name, pos, source.getWorld().getRegistryKey().getValue().toString(), type, visibility, source.getPlayer().getUuid());
-                                            MapNetworking.syncWaypointsToClient(source.getPlayer());
+                                            ServerPlayerEntity player = source.getPlayer();
+                                            if (player == null) {
+                                                source.sendMessage(Text.literal("§cOnly players can add waypoints."));
+                                                return 0;
+                                            }
+                                            MapManager.addWaypoint(name, pos, source.getWorld().getRegistryKey().getValue().toString(), type, visibility, player.getUuid());
+                                            MapNetworking.syncWaypointsToClient(player);
                                             source.sendMessage(Text.literal("§aWaypoint '" + name + "' added at " + pos.getX() + ", " + pos.getY() + ", " + pos.getZ()));
                                             return 1;
                                         }))))))

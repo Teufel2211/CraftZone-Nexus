@@ -9,6 +9,7 @@ import net.fabricmc.fabric.api.networking.v1.PayloadTypeRegistry;
 
 public final class CoreClient implements ClientModInitializer {
     @Override
+    @SuppressWarnings("null")
     public void onInitializeClient() {
         Safe.run("CoreClient.registerPayloads", () ->
             PayloadTypeRegistry.playC2S().register(HelloPayload.ID, HelloPayload.CODEC)

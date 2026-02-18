@@ -824,7 +824,7 @@ public class DiscordManager {
                 if (cmd.startsWith("/")) cmd = cmd.substring(1);
                 if (cmd.isBlank()) continue;
                 String root = cmd.split("\\s+")[0].toLowerCase();
-                counts.merge(root, 1, Integer::sum);
+                counts.put(root, counts.getOrDefault(root, 0) + 1);
             }
             if (counts.isEmpty()) {
                 event.reply("No command activity in recent logs.").setEphemeral(true).queue();
@@ -1278,7 +1278,8 @@ public class DiscordManager {
             if (s == null || s.isEmpty()) continue;
             usedSlots++;
             totalItems += s.getCount();
-            totals.merge(s.getName().getString(), s.getCount(), Integer::sum);
+            String itemName = s.getName().getString();
+            totals.put(itemName, totals.getOrDefault(itemName, 0) + s.getCount());
             String itemId = Registries.ITEM.getId(s.getItem()).toString();
             sb.append("`").append(slotLabel(i, inv.size())).append("` ")
                 .append(s.getName().getString()).append(" x").append(s.getCount())
@@ -1323,7 +1324,7 @@ public class DiscordManager {
             if (cmd.startsWith("/")) cmd = cmd.substring(1);
             if (cmd.isBlank()) continue;
             String root = cmd.split("\\s+")[0].toLowerCase();
-            counts.merge(root, 1, Integer::sum);
+            counts.put(root, counts.getOrDefault(root, 0) + 1);
         }
         return counts.entrySet().stream()
             .max(Map.Entry.comparingByValue())

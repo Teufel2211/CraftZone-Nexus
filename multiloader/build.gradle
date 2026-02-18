@@ -1,0 +1,36 @@
+plugins {
+    id "architectury-plugin" version "${architectury_plugin_version}"
+    id "dev.architectury.loom" version "${loom_version}" apply false
+}
+
+architectury {
+    minecraft = minecraft_version
+}
+
+allprojects {
+    group = mod_group
+    version = mod_version
+
+    repositories {
+        mavenCentral()
+        maven { url = "https://maven.architectury.dev/" }
+        maven { url = "https://maven.fabricmc.net/" }
+        maven { url = "https://maven.minecraftforge.net/" }
+        maven { url = "https://maven.neoforged.net/releases/" }
+    }
+}
+
+subprojects {
+    apply plugin: "dev.architectury.loom"
+
+    dependencies {
+        minecraft "com.mojang:minecraft:${minecraft_version}"
+    }
+
+    java {
+        withSourcesJar()
+        sourceCompatibility = JavaVersion.VERSION_21
+        targetCompatibility = JavaVersion.VERSION_21
+    }
+}
+

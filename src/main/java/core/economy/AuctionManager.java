@@ -9,7 +9,6 @@ import com.google.gson.JsonParseException;
 import com.google.gson.JsonPrimitive;
 import com.google.gson.JsonSerializationContext;
 import com.google.gson.JsonSerializer;
-import com.google.gson.reflect.TypeToken;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerLifecycleEvents;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents;
 import core.util.Safe;
@@ -23,7 +22,6 @@ import core.config.ConfigManager;
 import java.io.File;
 import java.io.FileReader;
 import java.io.FileWriter;
-import java.io.IOException;
 import java.lang.reflect.Type;
 import java.math.BigDecimal;
 import java.util.*;
@@ -280,6 +278,7 @@ public class AuctionManager {
         saveAuctions(null);
     }
 
+    @SuppressWarnings("null")
     public static void loadAuctions(MinecraftServer server) {
         EXECUTOR.submit(() -> {
             try {
