@@ -21,16 +21,79 @@ allprojects {
 }
 
 subprojects {
-    apply plugin: "dev.architectury.loom"
-
-    dependencies {
-        minecraft "com.mojang:minecraft:${minecraft_version}"
+    plugins.withId("dev.architectury.loom") {
+        dependencies {
+            minecraft "com.mojang:minecraft:${minecraft_version}"
+        }
     }
-
-    java {
-        withSourcesJar()
-        sourceCompatibility = JavaVersion.VERSION_21
-        targetCompatibility = JavaVersion.VERSION_21
+    plugins.withId("java") {
+        java {
+            withSourcesJar()
+            sourceCompatibility = JavaVersion.VERSION_21
+            targetCompatibility = JavaVersion.VERSION_21
+        }
     }
 }
 
+def propsFile = file("gradle.properties")
+def releaseNotesFile = file("$buildDir/release-notes.md")
+
+def parseVersion = { String v ->
+    def parts = v.tokenize(".")
+    if (parts.size() != 3) throw new GradleException("mod_version must be MAJOR.MINOR.PATCH, got: ${v}")
+    [parts[0] as int, parts[1] as int, parts[2] as int]
+}
+
+def formatVersion = { int major, int minor, int patch -> "${major}.${minor}.${patch}" }
+
+def nextVersion = { String current ->
+    def (major, minor, patch) = parseVersion(current)
+    if (minor >= 10) return formatVersion(major + 1, 0, 0)
+    patch += 1
+    if (patch >= 10) {
+        patch = 0
+        minor += 1
+    }
+    if (minor >= 10) {
+        minor = 0
+        major += 1
+    }
+    formatVersion(major, minor, patch)
+}
+
+tasks.register("bumpModVersion") {
+    group = "release"
+    description = "Bumps mod_version in multiloader/gradle.properties using 10-based rollover."
+    doLast {
+        def props = new Properties()
+        propsFile.withInputStream { props.load(it) }
+        def current = props.getProperty("mod_version", "1.0.0")
+        def bumped = nextVersion(current)
+        props.setProperty("mod_version", bumped)
+        propsFile.withOutputStream { props.store(it, null) }
+        println "Version bumped: ${current} -> ${bumped}"
+    }
+}
+
+tasks.register("generateReleaseNotes") {
+    group = "release"
+    description = "Generates release notes with only newest commit."
+    doLast {
+        def logText = new ByteArrayOutputStream()
+        exec {
+            commandLine "git", "log", "--pretty=format:- %h %s", "-n", "1"
+            standardOutput = logText
+            errorOutput = new ByteArrayOutputStream()
+            ignoreExitValue = true
+        }
+        def notes = logText.toString("UTF-8").trim()
+        if (!notes) notes = "- Maintenance release"
+        releaseNotesFile.parentFile.mkdirs()
+        releaseNotesFile.text = """## ${project.version}
+
+### Changes
+${notes}
+"""
+        println "Release notes generated at ${releaseNotesFile}"
+    }
+}

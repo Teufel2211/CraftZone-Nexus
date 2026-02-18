@@ -1,46 +1,36 @@
-# Release Checklist (Modrinth + CurseForge)
+# Release Checklist (Fabric + Forge + NeoForge)
 
-## 1. Update version
-- Edit `gradle.properties`:
-  - `mod_version=...`
+## 1. Configure upload tokens and project IDs
+- Copy `scripts/release-config.example.ps1` to `scripts/release-config.ps1`.
+- Fill:
+  - `MODRINTH_TOKEN`
+  - `MODRINTH_PROJECT_ID` (or loader-specific overrides)
+  - `CURSEFORGE_TOKEN`
+  - `CURSEFORGE_PROJECT_ID` (or loader-specific overrides)
 
-## 2. Update changelog
-- Add new section in `CHANGELOG.md` with release date and changes.
-
-## 3. Build artifacts
+## 2. Run one command
 ```powershell
-./gradlew clean build
+.\scripts\release.ps1 -ReleaseType release
 ```
 
-Artifacts:
-- `build/libs/core-mod-<version>.jar` (main)
-- `build/libs/core-mod-<version>-sources.jar` (sources)
+What this does:
+- Preflight build for `common`, `fabric`, `forge`, `neoforge` (abort on failure)
+- Auto bump `multiloader/gradle.properties` version
+- Build remapped jars for all loaders
+- Generate release notes from newest commit only
+- Upload all 3 loaders to Modrinth + CurseForge
 
-## 4. Modrinth upload
-- Project: `core` (or your existing slug)
-- Loader: `fabric`
-- Game version: `1.21.11`
-- Java: `21`
-- Dependencies:
-  - `fabric-api` (required)
-  - `voicechat` (required, if kept in depends)
-- Changelog: copy from `CHANGELOG.md`
-- Primary file: remapped main jar from `build/libs`
+## 3. Produced loader artifacts
+- `multiloader/fabric/build/libs/fabric-<version>.jar`
+- `multiloader/forge/build/libs/forge-<version>.jar`
+- `multiloader/neoforge/build/libs/neoforge-<version>.jar`
 
-## 5. CurseForge upload
-- Game version: `1.21.11`
-- Mod loader: `Fabric`
-- Java: `21`
-- Relations:
-  - Fabric API: Required
-  - Simple Voice Chat: Required (if applicable)
-- Changelog: copy from `CHANGELOG.md`
-- Upload the same main jar.
+## 4. Versioning
+- Uses 10-based rollover:
+  - `1.0.9 -> 1.1.0`
+  - `1.9.9 -> 2.0.0`
 
-## 6. Sanity checks
-- Start dedicated server with only required dependencies.
-- Confirm no missing icon/metadata warnings.
-- Confirm key commands:
-  - `/shop`
-  - `/shopadmin audit`
-  - `/shopadmin recategorize`
+## 5. Release notes
+- Automatically generated at:
+  - `multiloader/build/release-notes.md`
+- Includes only newest change (`git log -n 1`).

@@ -8,6 +8,11 @@ $ErrorActionPreference = "Stop"
 
 Write-Host "== Core Mod Release Pipeline =="
 
+$multiRoot = "multiloader"
+$multiGradleProps = Join-Path $multiRoot "gradle.properties"
+$gradlePrefix = @("-p", $multiRoot)
+$env:RELEASE_TYPE = $ReleaseType
+
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $localConfig = Join-Path $scriptDir "release-config.ps1"
 if (Test-Path $localConfig) {
@@ -30,8 +35,20 @@ if (-not $env:CURSEFORGE_PROJECT_ID) {
     Write-Warning "CURSEFORGE_PROJECT_ID is not set. CurseForge upload will be skipped."
 }
 
+# Single-project mode: if no loader-specific IDs are set, reuse one shared project ID.
+if ($env:MODRINTH_PROJECT_ID) {
+    if (-not $env:MODRINTH_PROJECT_ID_FABRIC) { $env:MODRINTH_PROJECT_ID_FABRIC = $env:MODRINTH_PROJECT_ID }
+    if (-not $env:MODRINTH_PROJECT_ID_FORGE) { $env:MODRINTH_PROJECT_ID_FORGE = $env:MODRINTH_PROJECT_ID }
+    if (-not $env:MODRINTH_PROJECT_ID_NEOFORGE) { $env:MODRINTH_PROJECT_ID_NEOFORGE = $env:MODRINTH_PROJECT_ID }
+}
+if ($env:CURSEFORGE_PROJECT_ID) {
+    if (-not $env:CURSEFORGE_PROJECT_ID_FABRIC) { $env:CURSEFORGE_PROJECT_ID_FABRIC = $env:CURSEFORGE_PROJECT_ID }
+    if (-not $env:CURSEFORGE_PROJECT_ID_FORGE) { $env:CURSEFORGE_PROJECT_ID_FORGE = $env:CURSEFORGE_PROJECT_ID }
+    if (-not $env:CURSEFORGE_PROJECT_ID_NEOFORGE) { $env:CURSEFORGE_PROJECT_ID_NEOFORGE = $env:CURSEFORGE_PROJECT_ID }
+}
+
 function Get-ModVersion {
-    $line = Get-Content "./gradle.properties" | Where-Object { $_ -match '^mod_version=' } | Select-Object -First 1
+    $line = Get-Content $multiGradleProps | Where-Object { $_ -match '^mod_version=' } | Select-Object -First 1
     if (-not $line) { return "unknown" }
     return ($line -split '=', 2)[1].Trim()
 }
@@ -55,7 +72,7 @@ function Invoke-GradleChecked {
     )
     for ($attempt = 1; $attempt -le $Retries; $attempt++) {
         $gradleOut = @()
-        & ./gradlew @Arguments 2>&1 | Tee-Object -Variable gradleOut
+        & ./gradlew @gradlePrefix @Arguments 2>&1 | Tee-Object -Variable gradleOut
         $exitCode = $LASTEXITCODE
         if ($null -eq $exitCode) { $exitCode = 0 }
         $outText = ($gradleOut | ForEach-Object { $_.ToString() }) -join "`n"
@@ -74,12 +91,30 @@ function Invoke-GradleChecked {
             Start-Sleep -Seconds $DelaySeconds
             continue
         }
-        throw "Gradle command failed (exit $exitCode): ./gradlew $($Arguments -join ' ')"
+        throw "Gradle command failed (exit $exitCode): ./gradlew $($gradlePrefix + $Arguments -join ' ')"
+    }
+}
+
+$loaders = @("fabric", "forge", "neoforge")
+
+function Invoke-UploadPerLoader {
+    param(
+        [Parameter(Mandatory = $true)][ValidateSet("modrinth", "curseforge")] [string]$Platform
+    )
+    foreach ($loader in $loaders) {
+        $state = Get-ReleaseStatePath -Version "$currentVersion-$loader" -Platform $Platform
+        if ((Test-Path $state) -and -not $ForceUpload) {
+            Write-Warning "Skipping $Platform/${loader}: already uploaded for version $currentVersion. Use -ForceUpload to override."
+            continue
+        }
+        Write-Host " - Upload $Platform ($loader)..."
+        Invoke-GradleChecked @(":${loader}:$Platform") -Retries 3 -DelaySeconds 8
+        Set-Content -Path $state -Value "$(Get-Date -Format o) releaseType=$ReleaseType"
     }
 }
 
 Write-Host "1) Preflight build (must pass before version bump/upload)..."
-Invoke-GradleChecked @("clean", "build", "-x", "modrinth", "-x", "curseforge", "-PreleaseType=$ReleaseType")
+Invoke-GradleChecked @(":common:build", ":fabric:build", ":forge:build", ":neoforge:build", "-x", "modrinth", "-x", "curseforge")
 
 Write-Host "2) Bump version..."
 Invoke-GradleChecked @("bumpModVersion")
@@ -87,38 +122,25 @@ $currentVersion = Get-ModVersion
 Write-Host "Current version: $currentVersion"
 
 Write-Host "3) Build artifact with bumped version..."
-# Use remapJar to avoid plugin side effects that can hook upload tasks into build.
-Invoke-GradleChecked @("clean", "remapJar", "sourcesJar", "-PreleaseType=$ReleaseType")
+Invoke-GradleChecked @(":common:build", ":fabric:remapJar", ":forge:remapJar", ":neoforge:remapJar", ":fabric:sourcesJar", ":forge:sourcesJar", ":neoforge:sourcesJar")
 
 Write-Host "4) Generate release notes..."
-Invoke-GradleChecked @("generateReleaseNotes", "-PreleaseType=$ReleaseType")
+Invoke-GradleChecked @("generateReleaseNotes")
 
 Write-Host "5) Upload to Modrinth/CurseForge (if configured)..."
 $hasModrinth = ($env:MODRINTH_TOKEN -and $env:MODRINTH_PROJECT_ID)
 $hasCurseforge = ($env:CURSEFORGE_TOKEN -and $env:CURSEFORGE_PROJECT_ID)
 
 if ($hasModrinth) {
-    Write-Host "4a) Upload Modrinth..."
-    $state = Get-ReleaseStatePath -Version $currentVersion -Platform "modrinth"
-    if ((Test-Path $state) -and -not $ForceUpload) {
-        Write-Warning "Skipping Modrinth: version $currentVersion already uploaded (marker exists). Use -ForceUpload to override."
-    } else {
-        Invoke-GradleChecked @("modrinth", "-PreleaseType=$ReleaseType") -Retries 3 -DelaySeconds 5
-        Set-Content -Path $state -Value "$(Get-Date -Format o) releaseType=$ReleaseType"
-    }
+    Write-Host "5a) Upload Modrinth (fabric+forge+neoforge)..."
+    Invoke-UploadPerLoader -Platform "modrinth"
 } else {
     Write-Warning "Skipping Modrinth upload (missing token or project id)."
 }
 
 if ($hasCurseforge) {
-    Write-Host "4b) Upload CurseForge..."
-    $state = Get-ReleaseStatePath -Version $currentVersion -Platform "curseforge"
-    if ((Test-Path $state) -and -not $ForceUpload) {
-        Write-Warning "Skipping CurseForge: version $currentVersion already uploaded (marker exists). Use -ForceUpload to override."
-    } else {
-        Invoke-GradleChecked @("curseforge", "-PreleaseType=$ReleaseType") -Retries 3 -DelaySeconds 8
-        Set-Content -Path $state -Value "$(Get-Date -Format o) releaseType=$ReleaseType"
-    }
+    Write-Host "5b) Upload CurseForge (fabric+forge+neoforge)..."
+    Invoke-UploadPerLoader -Platform "curseforge"
 } else {
     Write-Warning "Skipping CurseForge upload (missing token or project id)."
 }

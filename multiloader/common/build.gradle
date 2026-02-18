@@ -1,5 +1,6 @@
-architectury {
-    common("fabric", "forge", "neoforge")
+plugins {
+    id "architectury-plugin"
+    id "dev.architectury.loom"
 }
 
 dependencies {

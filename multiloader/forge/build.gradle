@@ -1,3 +1,10 @@
+plugins {
+    id "architectury-plugin"
+    id "dev.architectury.loom"
+    id "com.modrinth.minotaur" version "2.8.7"
+    id "com.matthewprenger.cursegradle" version "1.4.0"
+}
+
 architectury {
     platformSetupLoomIde()
     forge()
@@ -10,10 +17,9 @@ loom {
 }
 
 dependencies {
+    mappings loom.officialMojangMappings()
     forge "net.minecraftforge:forge:${forge_version}"
-    modImplementation "dev.architectury:architectury-forge:${architectury_api_version}"
-    common(project(path: ":common", configuration: "namedElements")) { transitive false }
-    forgeLike(project(path: ":common", configuration: "transformProductionForge"))
+    implementation project(":common")
 }
 
 processResources {
@@ -26,3 +32,62 @@ processResources {
     }
 }
 
+def releaseNotesFile = rootProject.file("build/release-notes.md")
+
+modrinth {
+    token = System.getenv("MODRINTH_TOKEN") ?: ""
+    projectId = (findProperty("modrinthProjectIdForge") ?: System.getenv("MODRINTH_PROJECT_ID_FORGE") ?: System.getenv("MODRINTH_PROJECT_ID") ?: "").toString()
+    versionNumber = "${project.version}+forge"
+    versionName = "${rootProject.name} ${project.version} (Forge)"
+    versionType = (findProperty("releaseType") ?: System.getenv("RELEASE_TYPE") ?: "release").toString()
+    uploadFile = tasks.named("remapJar")
+    gameVersions = [project.minecraft_version.toString()]
+    loaders = ["forge"]
+    changelog = releaseNotesFile.exists() ? releaseNotesFile.text : "Release ${project.version}"
+    failSilently = false
+}
+
+tasks.named("modrinth").configure {
+    dependsOn(tasks.named("remapJar"), rootProject.tasks.named("generateReleaseNotes"))
+    onlyIf {
+        def token = System.getenv("MODRINTH_TOKEN")
+        def pid = (findProperty("modrinthProjectIdForge") ?: System.getenv("MODRINTH_PROJECT_ID_FORGE") ?: System.getenv("MODRINTH_PROJECT_ID") ?: "").toString()
+        token != null && !token.isBlank() && !pid.isBlank()
+    }
+}
+
+curseforge {
+    apiKey = System.getenv("CURSEFORGE_TOKEN") ?: ""
+    def projectIdValue = (findProperty("curseforgeProjectIdForge") ?: System.getenv("CURSEFORGE_PROJECT_ID_FORGE") ?: System.getenv("CURSEFORGE_PROJECT_ID") ?: "").toString()
+    def minecraftTag = (findProperty("curseforgeMinecraftVersion") ?: System.getenv("CURSEFORGE_MINECRAFT_VERSION") ?: project.minecraft_version.toString()).toString()
+    def javaTag = (findProperty("curseforgeJavaVersion") ?: System.getenv("CURSEFORGE_JAVA_VERSION") ?: "Java 25").toString()
+    if (projectIdValue) {
+        project {
+            id = projectIdValue
+            releaseType = (findProperty("releaseType") ?: System.getenv("RELEASE_TYPE") ?: "release").toString()
+            changelogType = "markdown"
+            changelog = releaseNotesFile.exists() ? releaseNotesFile.text : "Release ${project.version}"
+            addGameVersion minecraftTag
+            addGameVersion "Client"
+            addGameVersion "Server"
+            addGameVersion javaTag
+            addGameVersion "Forge"
+            mainArtifact(tasks.named("remapJar")) {
+                displayName = "Core Mod ${project.version} (Forge)"
+            }
+        }
+    }
+    options {
+        debug = false
+        javaIntegration = false
+    }
+}
+
+tasks.named("curseforge").configure {
+    dependsOn(tasks.named("remapJar"), rootProject.tasks.named("generateReleaseNotes"))
+    onlyIf {
+        def token = System.getenv("CURSEFORGE_TOKEN")
+        def pid = (findProperty("curseforgeProjectIdForge") ?: System.getenv("CURSEFORGE_PROJECT_ID_FORGE") ?: System.getenv("CURSEFORGE_PROJECT_ID") ?: "").toString()
+        token != null && !token.isBlank() && !pid.isBlank()
+    }
+}

@@ -7,6 +7,7 @@ public final class CoreFabric implements ModInitializer {
     @Override
     public void onInitialize() {
         CoreCommon.init();
+        FabricLoggingBridge.init();
+        FabricDashboardBridge.init();
     }
 }
-

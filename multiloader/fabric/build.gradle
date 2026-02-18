@@ -1,5 +1,9 @@
 plugins {
+    id "architectury-plugin"
+    id "dev.architectury.loom"
     id "com.github.johnrengelman.shadow" version "8.1.1"
+    id "com.modrinth.minotaur" version "2.8.7"
+    id "com.matthewprenger.cursegradle" version "1.4.0"
 }
 
 architectury {
@@ -11,9 +15,7 @@ dependencies {
     mappings "net.fabricmc:yarn:${yarn_mappings}:v2"
     modImplementation "net.fabricmc:fabric-loader:${fabric_loader_version}"
     modImplementation "net.fabricmc.fabric-api:fabric-api:${fabric_api_version}"
-    modImplementation "dev.architectury:architectury-fabric:${architectury_api_version}"
-    common(project(path: ":common", configuration: "namedElements")) { transitive false }
-    shadowBundle project(path: ":common", configuration: "transformProductionFabric")
+    implementation project(":common")
 }
 
 loom {
@@ -32,8 +34,68 @@ processResources {
         expand(
             version: project.version,
             mod_id: mod_id,
-            mod_name: mod_name
+            mod_name: mod_name,
+            minecraft_version: minecraft_version
         )
     }
 }
 
+def releaseNotesFile = rootProject.file("build/release-notes.md")
+
+modrinth {
+    token = System.getenv("MODRINTH_TOKEN") ?: ""
+    projectId = (findProperty("modrinthProjectIdFabric") ?: System.getenv("MODRINTH_PROJECT_ID_FABRIC") ?: System.getenv("MODRINTH_PROJECT_ID") ?: "").toString()
+    versionNumber = "${project.version}+fabric"
+    versionName = "${rootProject.name} ${project.version} (Fabric)"
+    versionType = (findProperty("releaseType") ?: System.getenv("RELEASE_TYPE") ?: "release").toString()
+    uploadFile = tasks.named("remapJar")
+    gameVersions = [project.minecraft_version.toString()]
+    loaders = ["fabric"]
+    changelog = releaseNotesFile.exists() ? releaseNotesFile.text : "Release ${project.version}"
+    failSilently = false
+}
+
+tasks.named("modrinth").configure {
+    dependsOn(tasks.named("remapJar"), rootProject.tasks.named("generateReleaseNotes"))
+    onlyIf {
+        def token = System.getenv("MODRINTH_TOKEN")
+        def pid = (findProperty("modrinthProjectIdFabric") ?: System.getenv("MODRINTH_PROJECT_ID_FABRIC") ?: System.getenv("MODRINTH_PROJECT_ID") ?: "").toString()
+        token != null && !token.isBlank() && !pid.isBlank()
+    }
+}
+
+curseforge {
+    apiKey = System.getenv("CURSEFORGE_TOKEN") ?: ""
+    def projectIdValue = (findProperty("curseforgeProjectIdFabric") ?: System.getenv("CURSEFORGE_PROJECT_ID_FABRIC") ?: System.getenv("CURSEFORGE_PROJECT_ID") ?: "").toString()
+    def minecraftTag = (findProperty("curseforgeMinecraftVersion") ?: System.getenv("CURSEFORGE_MINECRAFT_VERSION") ?: project.minecraft_version.toString()).toString()
+    def javaTag = (findProperty("curseforgeJavaVersion") ?: System.getenv("CURSEFORGE_JAVA_VERSION") ?: "Java 25").toString()
+    if (projectIdValue) {
+        project {
+            id = projectIdValue
+            releaseType = (findProperty("releaseType") ?: System.getenv("RELEASE_TYPE") ?: "release").toString()
+            changelogType = "markdown"
+            changelog = releaseNotesFile.exists() ? releaseNotesFile.text : "Release ${project.version}"
+            addGameVersion minecraftTag
+            addGameVersion "Client"
+            addGameVersion "Server"
+            addGameVersion javaTag
+            addGameVersion "Fabric"
+            mainArtifact(tasks.named("remapJar")) {
+                displayName = "Core Mod ${project.version} (Fabric)"
+            }
+        }
+    }
+    options {
+        debug = false
+        javaIntegration = false
+    }
+}
+
+tasks.named("curseforge").configure {
+    dependsOn(tasks.named("remapJar"), rootProject.tasks.named("generateReleaseNotes"))
+    onlyIf {
+        def token = System.getenv("CURSEFORGE_TOKEN")
+        def pid = (findProperty("curseforgeProjectIdFabric") ?: System.getenv("CURSEFORGE_PROJECT_ID_FABRIC") ?: System.getenv("CURSEFORGE_PROJECT_ID") ?: "").toString()
+        token != null && !token.isBlank() && !pid.isBlank()
+    }
+}
