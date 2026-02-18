@@ -230,6 +230,18 @@ function Resolve-DependenciesForMc {
     return $resolved
 }
 
+function Has-RequiredLaneDeps {
+    param([Parameter(Mandatory = $true)]$Deps)
+    return -not (
+        [string]::IsNullOrWhiteSpace($Deps.yarn_mappings) -or
+        [string]::IsNullOrWhiteSpace($Deps.fabric_loader_version) -or
+        [string]::IsNullOrWhiteSpace($Deps.fabric_api_version) -or
+        [string]::IsNullOrWhiteSpace($Deps.forge_version) -or
+        [string]::IsNullOrWhiteSpace($Deps.neoforge_version) -or
+        [string]::IsNullOrWhiteSpace($Deps.architectury_api_version)
+    )
+}
+
 function Get-ReleaseStatePath {
     param(
         [Parameter(Mandatory = $true)][string]$Version,
@@ -476,6 +488,7 @@ if (-not $laneData.lanes -or $laneData.lanes.Count -eq 0) {
     throw "No lanes defined in $LaneFile"
 }
 
+$effectiveSkipFailedLanes = $SkipFailedLanes -or $AutoResolveDeps
 $propsBackup = Get-Content -Raw $multiGradleProps
 try {
     foreach ($lane in $laneData.lanes) {
@@ -485,6 +498,14 @@ try {
         if ($AutoResolveDeps) {
             Write-Host "Auto-resolving dependencies for lane $($lane.minecraft_version) ..."
             $resolved = Resolve-DependenciesForMc -MinecraftVersion "$($lane.minecraft_version)"
+            if (-not (Has-RequiredLaneDeps -Deps $resolved)) {
+                $msg = "Could not resolve full dependency set for lane $($lane.minecraft_version)."
+                if ($effectiveSkipFailedLanes) {
+                    Write-Warning "$msg Skipping lane."
+                    continue
+                }
+                throw $msg
+            }
             if ($resolved.yarn_mappings) { $lane.yarn_mappings = $resolved.yarn_mappings }
             if ($resolved.fabric_loader_version) { $lane.fabric_loader_version = $resolved.fabric_loader_version }
             if ($resolved.fabric_api_version) { $lane.fabric_api_version = $resolved.fabric_api_version }
@@ -502,7 +523,7 @@ try {
         try {
             Invoke-SingleRelease
         } catch {
-            if ($SkipFailedLanes) {
+            if ($effectiveSkipFailedLanes) {
                 Write-Warning "Lane failed and was skipped: $($lane.minecraft_version)"
                 continue
             }
