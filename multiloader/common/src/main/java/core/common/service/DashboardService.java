@@ -230,7 +230,13 @@ public final class DashboardService {
 
     private static boolean authorized(HttpExchange exchange) {
         var cfg = ConfigManager.getConfig();
-        String token = cfg != null && cfg.dashboard != null ? safe(cfg.dashboard.token, "") : "";
+        String token = "";
+        if (cfg != null && cfg.dashboard != null && cfg.dashboard.token != null && !cfg.dashboard.token.isBlank()) {
+            token = cfg.dashboard.token;
+        } else if (cfg != null && cfg.logging != null) {
+            // Legacy fallback: old configs used logging.dashboardToken.
+            token = safe(cfg.logging.dashboardToken, "");
+        }
         if (token.isBlank()) return true;
         String auth = exchange.getRequestHeaders().getFirst("Authorization");
         if (auth != null && auth.startsWith("Bearer ")) {
@@ -286,12 +292,21 @@ public final class DashboardService {
     }
 
     private static String dashboardHost(ConfigManager.Config cfg) {
+        // If dashboard is enabled through legacy logging config, honor legacy host first.
+        if (cfg != null && cfg.logging != null && cfg.logging.dashboardEnabled
+            && cfg.logging.dashboardHost != null && !cfg.logging.dashboardHost.isBlank()) {
+            return cfg.logging.dashboardHost;
+        }
         if (cfg != null && cfg.dashboard != null && cfg.dashboard.host != null && !cfg.dashboard.host.isBlank()) return cfg.dashboard.host;
         if (cfg != null && cfg.logging != null && cfg.logging.dashboardHost != null && !cfg.logging.dashboardHost.isBlank()) return cfg.logging.dashboardHost;
         return "127.0.0.1";
     }
 
     private static int dashboardPort(ConfigManager.Config cfg) {
+        // If dashboard is enabled through legacy logging config, honor legacy port first.
+        if (cfg != null && cfg.logging != null && cfg.logging.dashboardEnabled && cfg.logging.dashboardPort > 0) {
+            return cfg.logging.dashboardPort;
+        }
         if (cfg != null && cfg.dashboard != null && cfg.dashboard.port > 0) return cfg.dashboard.port;
         if (cfg != null && cfg.logging != null && cfg.logging.dashboardPort > 0) return cfg.logging.dashboardPort;
         return 8787;

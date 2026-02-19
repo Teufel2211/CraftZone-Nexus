@@ -582,38 +582,46 @@ try {
         if (-not $lane.minecraft_version) { continue }
         Write-Host ""
         Write-Host "== Matrix lane: $($lane.minecraft_version) =="
-        if ($AutoResolveDeps) {
-            Write-Host "Auto-resolving dependencies for lane $($lane.minecraft_version) ..."
-            $resolved = Resolve-DependenciesForMc -MinecraftVersion "$($lane.minecraft_version)"
-            $lane.yarn_mappings = $resolved.yarn_mappings
-            $lane.fabric_loader_version = $resolved.fabric_loader_version
-            $lane.fabric_api_version = $resolved.fabric_api_version
-            $lane.forge_version = $resolved.forge_version
-            $lane.neoforge_version = $resolved.neoforge_version
-            $lane.architectury_api_version = $resolved.architectury_api_version
+        try {
+            if ($AutoResolveDeps) {
+                Write-Host "Auto-resolving dependencies for lane $($lane.minecraft_version) ..."
+                $resolved = Resolve-DependenciesForMc -MinecraftVersion "$($lane.minecraft_version)"
+                $lane.yarn_mappings = $resolved.yarn_mappings
+                $lane.fabric_loader_version = $resolved.fabric_loader_version
+                $lane.fabric_api_version = $resolved.fabric_api_version
+                $lane.forge_version = $resolved.forge_version
+                $lane.neoforge_version = $resolved.neoforge_version
+                $lane.architectury_api_version = $resolved.architectury_api_version
 
-            if (-not (Has-RequiredLaneDeps -Deps $lane)) {
-                $missing = (Get-MissingLaneDeps -Deps $lane) -join ", "
-                $msg = "Could not resolve full dependency set for $($lane.minecraft_version). Missing: $missing"
+                if (-not (Has-RequiredLaneDeps -Deps $lane)) {
+                    $missing = (Get-MissingLaneDeps -Deps $lane) -join ", "
+                    $msg = "Could not resolve full dependency set for $($lane.minecraft_version). Missing: $missing"
+                    if ($effectiveSkipFailedLanes) {
+                        Write-Warning "$msg Skipping lane."
+                        continue
+                    }
+                    throw $msg
+                }
+            }
+            Set-GradleProperty -FilePath $multiGradleProps -Key "minecraft_version" -Value "$($lane.minecraft_version)"
+            Set-GradleProperty -FilePath $multiGradleProps -Key "yarn_mappings" -Value "$($lane.yarn_mappings)"
+            Set-GradleProperty -FilePath $multiGradleProps -Key "fabric_loader_version" -Value "$($lane.fabric_loader_version)"
+            Set-GradleProperty -FilePath $multiGradleProps -Key "fabric_api_version" -Value "$($lane.fabric_api_version)"
+            Set-GradleProperty -FilePath $multiGradleProps -Key "forge_version" -Value "$($lane.forge_version)"
+            Set-GradleProperty -FilePath $multiGradleProps -Key "neoforge_version" -Value "$($lane.neoforge_version)"
+            Set-GradleProperty -FilePath $multiGradleProps -Key "architectury_api_version" -Value "$($lane.architectury_api_version)"
+            try {
+                Invoke-SingleRelease
+            } catch {
                 if ($effectiveSkipFailedLanes) {
-                    Write-Warning "$msg Skipping lane."
+                    Write-Warning "Lane failed and was skipped: $($lane.minecraft_version). Reason: $($_.Exception.Message)"
                     continue
                 }
-                throw $msg
+                throw
             }
-        }
-        Set-GradleProperty -FilePath $multiGradleProps -Key "minecraft_version" -Value "$($lane.minecraft_version)"
-        Set-GradleProperty -FilePath $multiGradleProps -Key "yarn_mappings" -Value "$($lane.yarn_mappings)"
-        Set-GradleProperty -FilePath $multiGradleProps -Key "fabric_loader_version" -Value "$($lane.fabric_loader_version)"
-        Set-GradleProperty -FilePath $multiGradleProps -Key "fabric_api_version" -Value "$($lane.fabric_api_version)"
-        Set-GradleProperty -FilePath $multiGradleProps -Key "forge_version" -Value "$($lane.forge_version)"
-        Set-GradleProperty -FilePath $multiGradleProps -Key "neoforge_version" -Value "$($lane.neoforge_version)"
-        Set-GradleProperty -FilePath $multiGradleProps -Key "architectury_api_version" -Value "$($lane.architectury_api_version)"
-        try {
-            Invoke-SingleRelease
         } catch {
             if ($effectiveSkipFailedLanes) {
-                Write-Warning "Lane failed and was skipped: $($lane.minecraft_version). Reason: $($_.Exception.Message)"
+                Write-Warning "Lane setup failed and was skipped: $($lane.minecraft_version). Reason: $($_.Exception.Message)"
                 continue
             }
             throw

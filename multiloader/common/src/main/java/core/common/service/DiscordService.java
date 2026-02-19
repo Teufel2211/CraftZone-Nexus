@@ -42,6 +42,9 @@ public final class DiscordService {
         boolean enabled = isEnabled(cfg);
         boolean hasToken = cfg != null && cfg.discord != null && cfg.discord.botToken != null && !cfg.discord.botToken.isBlank();
         LOGGER.info("Common DiscordService initialized (enabled={}, tokenConfigured={}, webhookConfigured={})", enabled, hasToken, hasAnyWebhook(cfg));
+        if (hasToken && !hasAnyWebhook(cfg)) {
+            LOGGER.warn("Discord bot token is configured, but common runtime currently uses webhook forwarding only. Configure a webhook URL to enable Discord output.");
+        }
     }
 
     public static void forwardJoin(String playerName) {
